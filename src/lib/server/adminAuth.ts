@@ -1,14 +1,32 @@
 import crypto from "crypto";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
+import { getSupabaseAdmin } from "@/lib/server/supabaseAdmin";
 
 const DEFAULT_ACCOUNT = "ytadmin";
 const DEFAULT_PASSWORD = "lhcyqopco";
 
 type AdminAuthConfig = {
   account: string;
-  password: string;
+  passwordHash: string;
 };
+
+function scryptHash(password: string, salt = crypto.randomBytes(16).toString("hex")) {
+  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  return `scrypt:${salt}:${hash}`;
+}
+
+function verifyPassword(password: string, encodedHash: string) {
+  const parts = encodedHash.split(":");
+  if (parts.length !== 3 || parts[0] !== "scrypt") return false;
+  const salt = parts[1];
+  const expectedHex = parts[2];
+  const actualHex = crypto.scryptSync(password, salt, 64).toString("hex");
+  const expected = Buffer.from(expectedHex, "hex");
+  const actual = Buffer.from(actualHex, "hex");
+  if (expected.length !== actual.length) return false;
+  return crypto.timingSafeEqual(expected, actual);
+}
 
 function authConfigPath() {
   return path.join(process.cwd(), "data", "admin-auth.json");
@@ -24,21 +42,61 @@ async function ensureConfigFile() {
   } catch {
     const initial: AdminAuthConfig = {
       account: DEFAULT_ACCOUNT,
-      password: DEFAULT_PASSWORD,
+      passwordHash: scryptHash(DEFAULT_PASSWORD),
     };
     await writeFile(filePath, JSON.stringify(initial, null, 2), "utf-8");
   }
 }
 
-export async function getAdminAuthConfig(): Promise<AdminAuthConfig> {
+async function getAdminAuthConfigFromLocal(): Promise<AdminAuthConfig> {
   await ensureConfigFile();
   const filePath = authConfigPath();
   const raw = await readFile(filePath, "utf-8");
   const parsed = JSON.parse(raw) as Partial<AdminAuthConfig>;
+  const maybeLegacyPassword = (parsed as { password?: string }).password;
   return {
     account: parsed.account || DEFAULT_ACCOUNT,
-    password: parsed.password || DEFAULT_PASSWORD,
+    passwordHash:
+      parsed.passwordHash ||
+      (maybeLegacyPassword ? scryptHash(maybeLegacyPassword) : scryptHash(DEFAULT_PASSWORD)),
   };
+}
+
+async function getAdminAuthConfigFromSupabase(): Promise<AdminAuthConfig | null> {
+  const admin = getSupabaseAdmin();
+  if (!admin) return null;
+
+  const { data, error } = await admin
+    .from("admin_auth")
+    .select("account,password_hash")
+    .eq("account", DEFAULT_ACCOUNT)
+    .limit(1);
+
+  if (error) {
+    throw new Error(`读取 Supabase 管理员账号失败: ${error.message}`);
+  }
+  if (data && data.length > 0) {
+    return {
+      account: (data[0].account as string) || DEFAULT_ACCOUNT,
+      passwordHash: (data[0].password_hash as string) || scryptHash(DEFAULT_PASSWORD),
+    };
+  }
+
+  const initialHash = scryptHash(DEFAULT_PASSWORD);
+  const { error: insertError } = await admin.from("admin_auth").insert({
+    account: DEFAULT_ACCOUNT,
+    password_hash: initialHash,
+  });
+  if (insertError) {
+    throw new Error(`初始化 Supabase 管理员账号失败: ${insertError.message}`);
+  }
+  return { account: DEFAULT_ACCOUNT, passwordHash: initialHash };
+}
+
+export async function getAdminAuthConfig(): Promise<AdminAuthConfig> {
+  const supabaseConfig = await getAdminAuthConfigFromSupabase();
+  if (supabaseConfig) return supabaseConfig;
+  return getAdminAuthConfigFromLocal();
 }
 
 export async function verifyAdminLogin(input: {
@@ -46,7 +104,7 @@ export async function verifyAdminLogin(input: {
   password: string;
 }) {
   const cfg = await getAdminAuthConfig();
-  return input.account === cfg.account && input.password === cfg.password;
+  return input.account === cfg.account && verifyPassword(input.password, cfg.passwordHash);
 }
 
 export async function updateAdminPassword(input: {
@@ -54,17 +112,29 @@ export async function updateAdminPassword(input: {
   newPassword: string;
 }) {
   const cfg = await getAdminAuthConfig();
-  if (input.currentPassword !== cfg.password) {
+  if (!verifyPassword(input.currentPassword, cfg.passwordHash)) {
     return { ok: false as const, error: "当前密码不正确" };
   }
   if (!input.newPassword || input.newPassword.length < 6) {
     return { ok: false as const, error: "新密码至少 6 位" };
   }
 
-  const next: AdminAuthConfig = {
-    account: DEFAULT_ACCOUNT,
-    password: input.newPassword,
-  };
+  const nextHash = scryptHash(input.newPassword);
+  const admin = getSupabaseAdmin();
+  if (admin) {
+    const { error } = await admin.from("admin_auth").upsert(
+      {
+        account: DEFAULT_ACCOUNT,
+        password_hash: nextHash,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "account" },
+    );
+    if (!error) return { ok: true as const };
+    return { ok: false as const, error: `更新 Supabase 密码失败: ${error.message}` };
+  }
+
+  const next: AdminAuthConfig = { account: DEFAULT_ACCOUNT, passwordHash: nextHash };
   await writeFile(authConfigPath(), JSON.stringify(next, null, 2), "utf-8");
   return { ok: true as const };
 }

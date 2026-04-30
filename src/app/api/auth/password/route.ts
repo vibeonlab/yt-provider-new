@@ -18,7 +18,15 @@ export async function POST(req: Request) {
     );
   }
 
-  const result = await updateAdminPassword({ currentPassword, newPassword });
+  let result: Awaited<ReturnType<typeof updateAdminPassword>>;
+  try {
+    result = await updateAdminPassword({ currentPassword, newPassword });
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: "密码系统配置异常，请检查 Supabase 管理员账号表" },
+      { status: 500 },
+    );
+  }
   if (!result.ok) {
     return NextResponse.json(
       { ok: false, error: result.error },

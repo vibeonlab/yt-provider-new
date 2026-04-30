@@ -49,10 +49,18 @@ export async function POST(req: Request) {
     );
   }
 
-  const loginOk = await verifyAdminLogin({
-    account: account ?? "",
-    password,
-  });
+  let loginOk = false;
+  try {
+    loginOk = await verifyAdminLogin({
+      account: account ?? "",
+      password,
+    });
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: "登录系统配置异常，请检查 Supabase 管理员账号表" },
+      { status: 500 },
+    );
+  }
   if (!loginOk) {
     return NextResponse.json(
       { ok: false, error: "账号或密码错误" },
