@@ -1,5 +1,6 @@
+import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { updateAdminPassword } from "@/lib/server/adminAuth";
+import { updateAdminPassword, verifyAdminSessionToken } from "@/lib/server/adminAuth";
 
 type Body = {
   currentPassword: string;
@@ -7,6 +8,15 @@ type Body = {
 };
 
 export async function POST(req: Request) {
+  const cookieStore = await cookies();
+  const sessionToken = cookieStore.get("admin_session")?.value;
+  if (!verifyAdminSessionToken(sessionToken)) {
+    return NextResponse.json(
+      { ok: false, error: "未登录或登录已过期" },
+      { status: 401 },
+    );
+  }
+
   const body = (await req.json()) as Body;
   const currentPassword = body?.currentPassword ?? "";
   const newPassword = body?.newPassword ?? "";

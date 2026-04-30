@@ -153,3 +153,23 @@ export function signAdminSession(account: string) {
   return `${payload}:${sig}`;
 }
 
+export function verifyAdminSessionToken(token: string | undefined) {
+  if (!token) return false;
+  const parts = token.split(":");
+  if (parts.length !== 3) return false;
+  const [account, timestamp, providedSig] = parts;
+  if (!account || !timestamp || !providedSig) return false;
+  if (!/^\d+$/.test(timestamp)) return false;
+
+  const payload = `${account}:${timestamp}`;
+  const expectedSig = crypto
+    .createHmac("sha256", adminAuthSecret())
+    .update(payload)
+    .digest("hex");
+
+  const provided = Buffer.from(providedSig, "hex");
+  const expected = Buffer.from(expectedSig, "hex");
+  if (provided.length !== expected.length) return false;
+  return crypto.timingSafeEqual(provided, expected);
+}
+
