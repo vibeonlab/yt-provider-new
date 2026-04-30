@@ -30,6 +30,15 @@ export default function StreamersPage() {
     channelId: "",
     targetOnlineCount: 1,
   });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editSubmitting, setEditSubmitting] = useState(false);
+  const [editError, setEditError] = useState("");
+  const [editForm, setEditForm] = useState({
+    name: "",
+    liveUrl: "",
+    channelId: "",
+    targetOnlineCount: 1,
+  });
 
   function showToast(type: "success" | "error" | "info", message: string) {
     setToast({ visible: true, type, message });
@@ -173,6 +182,58 @@ export default function StreamersPage() {
       await load();
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  function openEdit(streamer: Streamer) {
+    setEditingId(streamer.id);
+    setEditError("");
+    setEditForm({
+      name: streamer.name,
+      liveUrl: streamer.liveUrl,
+      channelId: streamer.channelId,
+      targetOnlineCount: streamer.maxOnline,
+    });
+  }
+
+  function closeEdit() {
+    setEditingId(null);
+    setEditSubmitting(false);
+    setEditError("");
+  }
+
+  async function updateStreamer(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingId) return;
+    setEditError("");
+    if (!editForm.name.trim()) return setEditError("请填写主播名称");
+    if (!/^https?:\/\//i.test(editForm.liveUrl.trim())) {
+      return setEditError("直播地址需以 http/https 开头");
+    }
+    if (!editForm.channelId.trim()) return setEditError("请填写主播频道 ID");
+
+    setEditSubmitting(true);
+    try {
+      const res = await fetch(`/api/streamers/${editingId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: editForm.name.trim(),
+          liveUrl: editForm.liveUrl.trim(),
+          channelId: editForm.channelId.trim(),
+          targetOnlineCount: Number(editForm.targetOnlineCount) || 1,
+        }),
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string };
+      if (!res.ok || !data.ok) {
+        setEditError(data.error || "修改失败");
+        return;
+      }
+      closeEdit();
+      await load();
+      showToast("success", "主播信息已更新");
+    } finally {
+      setEditSubmitting(false);
     }
   }
 
@@ -338,7 +399,13 @@ export default function StreamersPage() {
                         <span>上线中...</span>
                       </>
                     ) : (
-                      "上线"
+                      <>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                          <path d="M12 19V5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                          <path d="M6 11L12 5L18 11" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        <span>上线</span>
+                      </>
                     )}
                   </button>
                   <button
@@ -352,14 +419,34 @@ export default function StreamersPage() {
                         <span>下线中...</span>
                       </>
                     ) : (
-                      "下线"
+                      <>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                          <path d="M12 5V19" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                          <path d="M6 13L12 19L18 13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        <span>下线</span>
+                      </>
                     )}
                   </button>
                   <button
-                    onClick={() => removeStreamer(s.id)}
-                    className="rounded-lg bg-red-600 text-white px-3 py-1.5 hover:bg-red-700"
+                    onClick={() => openEdit(s)}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 text-white px-3 py-1.5 hover:bg-blue-700"
                   >
-                    删除
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                      <path d="M4 20H8L18.5 9.5C19.3 8.7 19.3 7.3 18.5 6.5L17.5 5.5C16.7 4.7 15.3 4.7 14.5 5.5L4 16V20Z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+                    </svg>
+                    <span>修改</span>
+                  </button>
+                  <button
+                    onClick={() => removeStreamer(s.id)}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 text-white px-3 py-1.5 hover:bg-red-700"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                      <path d="M4 7H20" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                      <path d="M9 7V5H15V7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M7 7L8 20H16L17 7" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+                    </svg>
+                    <span>删除</span>
                   </button>
                 </td>
               </tr>
@@ -367,6 +454,84 @@ export default function StreamersPage() {
           </tbody>
         </table>
       </div>
+
+      {editingId ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4">
+          <form
+            onSubmit={updateStreamer}
+            className="w-full max-w-xl rounded-xl border border-zinc-200 bg-white p-4 shadow-xl"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-zinc-900">修改主播</h3>
+              <button
+                type="button"
+                onClick={closeEdit}
+                className="rounded-md px-2 py-1 text-zinc-500 hover:bg-zinc-100"
+              >
+                关闭
+              </button>
+            </div>
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+              <input
+                value={editForm.name}
+                onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="主播名称"
+                className="rounded-lg border border-zinc-300 px-3 py-2"
+              />
+              <input
+                value={editForm.channelId}
+                onChange={(e) =>
+                  setEditForm((f) => ({ ...f, channelId: e.target.value }))
+                }
+                placeholder="主播频道 ID"
+                className="rounded-lg border border-zinc-300 px-3 py-2"
+              />
+              <input
+                value={editForm.liveUrl}
+                onChange={(e) => setEditForm((f) => ({ ...f, liveUrl: e.target.value }))}
+                placeholder="直播地址（https://...）"
+                className="rounded-lg border border-zinc-300 px-3 py-2 md:col-span-2"
+              />
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={editForm.targetOnlineCount}
+                onChange={(e) =>
+                  setEditForm((f) => ({
+                    ...f,
+                    targetOnlineCount: Math.max(
+                      1,
+                      Math.min(10, Number(e.target.value) || 1),
+                    ),
+                  }))
+                }
+                placeholder="购买上线人数"
+                className="rounded-lg border border-zinc-300 px-3 py-2"
+              />
+            </div>
+            {editError ? (
+              <div className="mt-2 text-sm text-red-600">{editError}</div>
+            ) : null}
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeEdit}
+                className="rounded-lg border border-zinc-300 px-4 py-2 text-zinc-700 hover:bg-zinc-50"
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                disabled={editSubmitting}
+                className="rounded-lg bg-zinc-900 px-4 py-2 text-white hover:bg-black disabled:opacity-60"
+              >
+                {editSubmitting ? "保存中..." : "保存修改"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </section>
   );
 }

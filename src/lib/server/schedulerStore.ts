@@ -371,6 +371,69 @@ export async function removeStreamer(id: string) {
   });
 }
 
+export async function updateStreamer(
+  id: string,
+  input: {
+    name: string;
+    liveUrl: string;
+    channelId: string;
+    targetOnlineCount: number;
+  },
+) {
+  const name = input.name.trim();
+  const liveUrl = input.liveUrl.trim();
+  const channelId = input.channelId.trim();
+  const targetOnlineCount = Math.max(
+    1,
+    Math.min(10, Math.floor(input.targetOnlineCount)),
+  );
+
+  const admin = getSupabaseAdmin();
+  if (admin) {
+    const { error } = await admin
+      .from("streamers")
+      .update({
+        name,
+        live_url: liveUrl,
+        channel_id: channelId,
+        target_online_count: targetOnlineCount,
+      })
+      .eq("id", id);
+
+    if (!error) {
+      await writeOperationLog({
+        module: "主播设置",
+        action: "修改主播",
+        detail: `修改主播 ${id} -> ${name}(${channelId})`,
+        operator: "ytadmin",
+        level: "info",
+        meta: { streamerId: id, name, channelId, targetOnlineCount },
+      });
+      return { ok: true as const };
+    }
+  }
+
+  const data = await readStore();
+  const found = data.streamers.find((s) => s.id === id);
+  if (!found) {
+    return { ok: false as const, error: "streamer not found" };
+  }
+  found.name = name;
+  found.liveUrl = liveUrl;
+  found.channelId = channelId;
+  found.targetOnlineCount = targetOnlineCount;
+  await saveStore(data);
+  await writeOperationLog({
+    module: "主播设置",
+    action: "修改主播",
+    detail: `修改主播 ${id} -> ${name}(${channelId})`,
+    operator: "ytadmin",
+    level: "info",
+    meta: { streamerId: id, name, channelId, targetOnlineCount },
+  });
+  return { ok: true as const };
+}
+
 export async function markCommandResult(input: {
   commandId: string;
   success: boolean;

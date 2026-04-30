@@ -18,7 +18,13 @@ function scryptHash(password: string, salt = crypto.randomBytes(16).toString("he
 
 function verifyPassword(password: string, encodedHash: string) {
   const parts = encodedHash.split(":");
-  if (parts.length !== 3 || parts[0] !== "scrypt") return false;
+  if (parts.length !== 3 || parts[0] !== "scrypt") {
+    // Backward compatibility: allow legacy plain-text stored value.
+    const expected = Buffer.from(encodedHash, "utf-8");
+    const actual = Buffer.from(password, "utf-8");
+    if (expected.length !== actual.length) return false;
+    return crypto.timingSafeEqual(expected, actual);
+  }
   const salt = parts[1];
   const expectedHex = parts[2];
   const actualHex = crypto.scryptSync(password, salt, 64).toString("hex");
