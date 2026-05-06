@@ -1,6 +1,9 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
-import { listAgentBrowserStatuses } from "@/lib/server/agentStore";
+import {
+  listAgentBrowserStatuses,
+  listBroadcastCommandTargets,
+} from "@/lib/server/agentStore";
 import { getSupabaseAdmin } from "@/lib/server/supabaseAdmin";
 import { writeOperationLog } from "@/lib/server/operationLogs";
 
@@ -25,15 +28,18 @@ export type AssignmentRecord = {
   updatedAt: string;
 };
 
+export type CommandPayloadRecord = {
+  url: string;
+  mode?: "low" | "normal";
+};
+
 export type CommandRecord = {
   id: string;
   agentId: string;
   browserId: string;
-  type: "open_stream" | "go_home";
+  type: "open_stream" | "go_home" | "clear_disk_cache" | "set_power_mode";
   streamerId: string;
-  payload: {
-    url: string;
-  };
+  payload: CommandPayloadRecord;
   status: "pending" | "sent" | "done" | "failed";
   message?: string;
   createdAt: string;
@@ -42,7 +48,7 @@ export type CommandRecord = {
 
 export type CommandTaskView = {
   commandId: string;
-  type: "open_stream" | "go_home";
+  type: CommandRecord["type"];
   status: "pending" | "sent" | "done" | "failed";
   message: string;
   agentId: string;
@@ -605,15 +611,15 @@ export async function pollAgentCommands(agentId: string) {
           id: c.command_id as string,
           agentId,
           browserId: slotMap.get(c.browser_slot_id as string) || "",
-          type: c.type as "open_stream" | "go_home",
+          type: c.type as CommandRecord["type"],
           streamerId: (c.streamer_id as string) || "",
-          payload: (c.payload as { url: string }) || { url: "" },
+          payload: (c.payload as CommandPayloadRecord) || { url: "" },
           status: "sent" as const,
           createdAt: "",
           updatedAt: "",
         }));
       }
-      return [];
+      // Supabase 无待执行命令时继续读本地 JSON（广播可能只写入了 scheduler.json）
     }
   }
 
@@ -639,6 +645,103 @@ export async function pollAgentCommands(agentId: string) {
   });
   if (pending.length > 0) await saveStore(data);
   return pending;
+}
+
+/**
+ * 向每个目标浏览器各入队一条命令（清理磁盘缓存或设置电源/内存模式），由客户端轮询后执行。
+ */
+export async function enqueueBroadcastBrowserControl(
+  input:
+    | { kind: "clear_disk_cache" }
+    | { kind: "set_power_mode"; mode: "low" | "normal" },
+) {
+  const targets = await listBroadcastCommandTargets();
+  if (targets.length === 0) {
+    return { ok: true as const, enqueued: 0 };
+  }
+
+  const commandType: CommandRecord["type"] =
+    input.kind === "clear_disk_cache"
+      ? "clear_disk_cache"
+      : "set_power_mode";
+  const payload: CommandPayloadRecord =
+    input.kind === "clear_disk_cache"
+      ? { url: "" }
+      : { url: "", mode: input.mode };
+
+  /** 无 Supabase 槽位主键时使用本地 scheduler.json 入队（客户端轮询仍可能走 JSON） */
+  const supabaseTargets = targets.filter((t) => t.slotId && t.agentDatabaseId);
+  const jsonTargets = targets.filter((t) => !t.slotId || !t.agentDatabaseId);
+
+  let enqueued = 0;
+  const errors: string[] = [];
+
+  const admin = getSupabaseAdmin();
+  if (admin && supabaseTargets.length > 0) {
+    const { data: streamerPick } = await admin
+      .from("streamers")
+      .select("id")
+      .limit(1);
+    const fallbackStreamerId = (streamerPick?.[0]?.id as string) || null;
+
+    for (const t of supabaseTargets) {
+      const agentPk = t.agentDatabaseId as string;
+      const slotPk = t.slotId as string;
+
+      const commandId = newId("cmd");
+      const insertPayload: Record<string, unknown> = {
+        command_id: commandId,
+        agent_id: agentPk,
+        browser_slot_id: slotPk,
+        type: commandType,
+        payload,
+        status: "pending",
+      };
+      if (fallbackStreamerId) {
+        insertPayload.streamer_id = fallbackStreamerId;
+      }
+
+      const { error } = await admin.from("commands").insert(insertPayload);
+      if (!error) enqueued++;
+      else errors.push(`${t.agentId}:${t.browserId}: ${error.message}`);
+    }
+  }
+
+  if (jsonTargets.length > 0) {
+    const data = await readStore();
+    const now = new Date().toISOString();
+    for (const t of jsonTargets) {
+      data.commands.push({
+        id: newId("cmd"),
+        agentId: t.agentId,
+        browserId: t.browserId,
+        type: commandType,
+        streamerId: "",
+        payload,
+        status: "pending",
+        createdAt: now,
+        updatedAt: now,
+      });
+      enqueued++;
+    }
+    await saveStore(data);
+  }
+
+  await writeOperationLog({
+    module: "调度",
+    action: "广播浏览器控制",
+    detail: `type=${commandType}, enqueued=${enqueued}, targets=${targets.length}, supabase=${supabaseTargets.length}, json=${jsonTargets.length}${errors.length ? `; errors=${errors.slice(0, 5).join(";")}` : ""}`,
+    operator: "ytadmin",
+    level: errors.length ? "warning" : "info",
+    meta: { commandType, enqueued },
+  });
+
+  return {
+    ok: true as const,
+    enqueued,
+    targets: targets.length,
+    errors: errors.length ? errors : undefined,
+  };
 }
 
 export async function goOnline(streamerId: string) {
@@ -961,7 +1064,7 @@ export async function listRecentCommandTasks(limit = 300): Promise<CommandTaskVi
         const commandId = (r.command_id as string) || "";
         return {
           commandId,
-          type: (r.type as "open_stream" | "go_home") || "open_stream",
+          type: (r.type as CommandRecord["type"]) || "open_stream",
           status:
             (r.status as "pending" | "sent" | "done" | "failed") || "pending",
           message: (r.message as string) || "",

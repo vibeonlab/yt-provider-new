@@ -135,3 +135,24 @@ Phase 1 先用 JSON 持久化，后续可迁移到数据库。
 
 > 下线命令会下发 `go_home`，客户端应跳转 `https://www.youtube.com/`。
 
+---
+
+## Supabase：`commands.type` 约束（广播清理缓存 / 内存模式）
+
+管理端会向 `commands` 表写入 `type` 为下列值的行：
+
+| `type`              | 说明 |
+|---------------------|------|
+| `open_stream`       | 原有：打开直播间 |
+| `go_home`           | 原有：回首页 |
+| `clear_disk_cache`  | 仅清 DiskCache，不影响 Cookie |
+| `set_power_mode`    | `payload.mode` 为 `low` / `normal` |
+
+若插入时报错 `commands_type_check`，说明数据库仍只允许旧类型，请在 Supabase SQL Editor 执行：
+
+- 仓库内脚本：`docs/supabase-commands-type-migration.sql`
+
+执行后重新调用 `POST /api/admin/agent-browser-control` 即可正常 `enqueued`。
+
+客户端（EageSoop）需在轮询 `GET /api/agents/commands` 后识别上述 `type` 并执行（本项目 `Form1.cs` 已处理）。
+

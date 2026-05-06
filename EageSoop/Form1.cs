@@ -19,11 +19,12 @@ namespace EageSoop
 {
     public partial class Form1 : Form
     {
-        private const int MaxTabsPerClient = 10;
+        private const int MaxTabsPerClient = 5;
         private int userIndex = 1;
         private readonly HttpClient httpClient = new HttpClient();
         private readonly JavaScriptSerializer json = new JavaScriptSerializer();
         private readonly List<BrowserTabContext> browserContexts = new List<BrowserTabContext>();
+        private readonly Random likeDelayRandom = new Random();
         private System.Windows.Forms.Timer heartbeatTimer;
         private System.Windows.Forms.Timer statusTimer;
         private System.Windows.Forms.Timer commandTimer;
@@ -33,14 +34,37 @@ namespace EageSoop
         private int heartbeatIntervalMs;
         private int statusReportIntervalMs;
         private readonly HashSet<string> processedCommandIds = new HashSet<string>();
+        /// <summary>
+        /// true 表示低内存模式（全部标签 Low + 静音）；false 表示正常模式（全部 Normal + 不静音）。与按钮互相切换。
+        /// </summary>
+        private bool backgroundMemorySaverEnabled;
+
+        private System.Windows.Forms.Timer cacheSizeRefreshTimer;
+        private int cacheSizeMeasureBusy;
 
         public Form1()
         {
             InitializeComponent();
+            FormClosing += Form1_FormClosing;
             LoadAgentConfig();
             LoadProcessedCommands();
             InitializeAgentTimers();
             //InitializeAsync();
+        }
+
+        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            try
+            {
+                if (cacheSizeRefreshTimer != null)
+                {
+                    cacheSizeRefreshTimer.Stop();
+                    cacheSizeRefreshTimer.Tick -= CacheSizeRefreshTimer_Tick;
+                    cacheSizeRefreshTimer.Dispose();
+                    cacheSizeRefreshTimer = null;
+                }
+            }
+            catch { }
         }
 
         private WebView2 webView;
@@ -57,14 +81,27 @@ namespace EageSoop
             }
             txtAgentName.Text = agentName;
             UpdateWindowTitle();
+            SyncPowerModeButtonText();
+
+            cacheSizeRefreshTimer = new System.Windows.Forms.Timer();
+            cacheSizeRefreshTimer.Interval = 8000;
+            cacheSizeRefreshTimer.Tick += CacheSizeRefreshTimer_Tick;
+            cacheSizeRefreshTimer.Start();
+            _ = RefreshDiskCacheSizeDisplayAsync();
+
             _ = RegisterAgentAsync();
+        }
+
+        private async void CacheSizeRefreshTimer_Tick(object sender, EventArgs e)
+        {
+            await RefreshDiskCacheSizeDisplayAsync();
         }
 
         private async void BtnAddTab_Click(object sender, EventArgs e)
         {
             if (tabControl1.TabPages.Count >= MaxTabsPerClient)
             {
-                MessageBox.Show("最多只能打开 10 个标签页。");
+                MessageBox.Show($"最多只能打开 {MaxTabsPerClient} 个标签页。");
                 return;
             }
 
@@ -113,6 +150,385 @@ namespace EageSoop
             tab.Dispose(); // 🔥 메모리 정리
         }
 
+        private void BtnReduceMemory_Click(object sender, EventArgs e)
+        {
+            if (btnReduceMemory != null)
+                btnReduceMemory.Enabled = false;
+            try
+            {
+                backgroundMemorySaverEnabled = !backgroundMemorySaverEnabled;
+                ApplyWebViewMemoryTargets();
+                SyncPowerModeButtonText();
+
+                if (backgroundMemorySaverEnabled)
+                {
+                    UpdateMemoryReleaseStatus(
+                        DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                        "已切换为低内存模式：不暂停视频；全部标签静音 + 低内存目标。"
+                            + " Chromium 仍可能占用较多原生内存。"
+                    );
+                }
+                else
+                {
+                    UpdateMemoryReleaseStatus(
+                        DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                        "已切换为正常模式：全部标签普通内存目标并已取消静音。"
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                UpdateMemoryReleaseStatus(
+                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                    "失败：" + ex.Message,
+                    isError: true);
+            }
+            finally
+            {
+                try
+                {
+                    if (!IsDisposed && IsHandleCreated && btnReduceMemory != null)
+                        btnReduceMemory.Enabled = true;
+                }
+                catch { }
+            }
+        }
+
+        /// <summary>
+        /// 仅清除 HTTP/媒体磁盘缓存（DiskCache），不包含 Cookie、IndexedDB、LocalStorage、密码等。
+        /// </summary>
+        private async Task<string> ClearDiskCacheForContextAsync(BrowserTabContext ctx)
+        {
+            var wv = ctx.WebView;
+            if (wv == null || wv.IsDisposed || wv.CoreWebView2 == null)
+                return "webview_unavailable";
+            var profile = wv.CoreWebView2.Profile;
+            if (profile == null) return "no_profile";
+            await profile
+                .ClearBrowsingDataAsync(CoreWebView2BrowsingDataKinds.DiskCache)
+                .ConfigureAwait(true);
+            return null;
+        }
+
+        private async void BtnClearDiskCache_Click(object sender, EventArgs e)
+        {
+            if (btnClearDiskCache != null)
+                btnClearDiskCache.Enabled = false;
+            try
+            {
+                var ok = 0;
+                var failed = new List<string>();
+                foreach (var ctx in browserContexts)
+                {
+                    var wv = ctx.WebView;
+                    if (wv == null || wv.IsDisposed || wv.CoreWebView2 == null) continue;
+                    if (wv.CoreWebView2.Profile == null) continue;
+                    try
+                    {
+                        var err = await ClearDiskCacheForContextAsync(ctx).ConfigureAwait(true);
+                        if (err == null) ok++;
+                        else failed.Add((ctx.Name ?? ctx.BrowserId ?? "?") + ": " + err);
+                    }
+                    catch (Exception ex)
+                    {
+                        failed.Add((ctx.Name ?? ctx.BrowserId ?? "?") + ": " + ex.Message);
+                    }
+                }
+
+                await RefreshDiskCacheSizeDisplayAsync().ConfigureAwait(true);
+                if (lblDiskCacheSize != null && IsHandleCreated && !IsDisposed)
+                {
+                    var suffix =
+                        failed.Count > 0
+                            ? $" | 清理失败 {failed.Count} 个标签（已成功 {ok} 个）"
+                            : $" | 已清理 DiskCache（{ok} 个标签页，Cookie/登录未清除）";
+                    lblDiskCacheSize.Text += suffix;
+                    lblDiskCacheSize.ForeColor =
+                        failed.Count > 0 ? Color.DarkOrange : lblDiskCacheSize.ForeColor;
+                }
+            }
+            catch (Exception ex)
+            {
+                if (lblDiskCacheSize != null && IsHandleCreated && !IsDisposed)
+                {
+                    lblDiskCacheSize.ForeColor = Color.DarkRed;
+                    lblDiskCacheSize.Text = "磁盘缓存：清理失败 " + ex.Message;
+                }
+            }
+            finally
+            {
+                try
+                {
+                    if (!IsDisposed && IsHandleCreated && btnClearDiskCache != null)
+                        btnClearDiskCache.Enabled = true;
+                }
+                catch { }
+            }
+        }
+
+        /// <summary>
+        /// 汇总各标签 Profile 下 Chromium 典型磁盘缓存目录体积（与 WebView2 DiskCache 清理范围接近；估算值）。
+        /// 在后台线程遍历目录，默认约每 8 秒一次，对正常使用影响很小。
+        /// </summary>
+        private async Task RefreshDiskCacheSizeDisplayAsync()
+        {
+            if (System.Threading.Interlocked.CompareExchange(ref cacheSizeMeasureBusy, 1, 0) != 0)
+                return;
+            try
+            {
+                long total = await Task.Run(() =>
+                {
+                    long sum = 0;
+                    var seenUserData = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var ctx in browserContexts)
+                    {
+                        try
+                        {
+                            var ud = ctx.UserDataFolderPath;
+                            if (string.IsNullOrWhiteSpace(ud))
+                            {
+                                try
+                                {
+                                    ud = ctx.WebView?.CoreWebView2?.Profile?.ProfilePath;
+                                }
+                                catch { }
+                            }
+                            if (string.IsNullOrWhiteSpace(ud)) continue;
+                            ud = Path.GetFullPath(ud);
+                            if (!seenUserData.Add(ud)) continue;
+
+                            string apiPath = null;
+                            try
+                            {
+                                apiPath = ctx.WebView?.CoreWebView2?.Profile?.ProfilePath;
+                            }
+                            catch { }
+
+                            sum += SumDiskCacheRelatedBytes(apiPath, ud);
+                        }
+                        catch { }
+                    }
+                    return sum;
+                }).ConfigureAwait(true);
+
+                if (IsDisposed || !IsHandleCreated || lblDiskCacheSize == null) return;
+                var mb = total / (1024.0 * 1024.0);
+                lblDiskCacheSize.ForeColor = Color.FromArgb(70, 70, 120);
+                lblDiskCacheSize.Text =
+                    $"磁盘缓存（估算，Cache / Code Cache / GPUCache）：{mb:F1} MB";
+            }
+            finally
+            {
+                System.Threading.Interlocked.Exchange(ref cacheSizeMeasureBusy, 0);
+            }
+        }
+
+        /// <summary>
+        /// WebView2 实际缓存多在「用户数据目录\EBWebView\Default」下，而非 Profile API 返回路径的直接子目录。
+        /// </summary>
+        private static long SumDiskCacheRelatedBytes(string profilePathFromApi, string userDataFolder)
+        {
+            var dirNames = new[]
+            {
+                "Cache",
+                "Code Cache",
+                "GPUCache",
+            };
+            var countedDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            long sum = 0;
+
+            foreach (var root in GatherCacheSearchRoots(profilePathFromApi, userDataFolder))
+            {
+                foreach (var dn in dirNames)
+                {
+                    try
+                    {
+                        var full = Path.Combine(root, dn);
+                        if (!Directory.Exists(full)) continue;
+                        full = Path.GetFullPath(full);
+                        if (!countedDirs.Add(full)) continue;
+                        sum += SumDirectoryBytes(full);
+                    }
+                    catch { }
+                }
+            }
+
+            // 仍未找到时再浅层枚举 userDataFolder 下的子目录（适配未来目录结构变化）
+            if (sum == 0 && !string.IsNullOrWhiteSpace(userDataFolder))
+            {
+                try
+                {
+                    var ud = Path.GetFullPath(userDataFolder);
+                    if (Directory.Exists(ud))
+                    {
+                        foreach (var lev1 in Directory.EnumerateDirectories(ud))
+                        {
+                            foreach (var dn in dirNames)
+                            {
+                                try
+                                {
+                                    var full = Path.Combine(lev1, dn);
+                                    if (!Directory.Exists(full)) continue;
+                                    full = Path.GetFullPath(full);
+                                    if (!countedDirs.Add(full)) continue;
+                                    sum += SumDirectoryBytes(full);
+                                }
+                                catch { }
+                            }
+                            try
+                            {
+                                foreach (var lev2 in Directory.EnumerateDirectories(lev1))
+                                {
+                                    foreach (var dn in dirNames)
+                                    {
+                                        try
+                                        {
+                                            var full = Path.Combine(lev2, dn);
+                                            if (!Directory.Exists(full)) continue;
+                                            full = Path.GetFullPath(full);
+                                            if (!countedDirs.Add(full)) continue;
+                                            sum += SumDirectoryBytes(full);
+                                        }
+                                        catch { }
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            return sum;
+        }
+
+        private static IEnumerable<string> GatherCacheSearchRoots(
+            string profilePathFromApi,
+            string userDataFolder)
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            void Add(string p)
+            {
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(p)) return;
+                    p = Path.GetFullPath(p);
+                    if (Directory.Exists(p))
+                        set.Add(p);
+                }
+                catch { }
+            }
+
+            Add(profilePathFromApi);
+            Add(userDataFolder);
+            if (!string.IsNullOrWhiteSpace(userDataFolder))
+            {
+                Add(Path.Combine(userDataFolder, "Default"));
+                Add(Path.Combine(userDataFolder, "EBWebView"));
+                Add(Path.Combine(userDataFolder, "EBWebView", "Default"));
+            }
+            if (!string.IsNullOrWhiteSpace(profilePathFromApi))
+            {
+                Add(Path.Combine(profilePathFromApi, "Default"));
+                Add(Path.Combine(profilePathFromApi, "EBWebView", "Default"));
+            }
+
+            return set;
+        }
+
+        private static long SumDirectoryBytes(string rootDir)
+        {
+            long sum = 0;
+            try
+            {
+                foreach (var path in Directory.EnumerateFiles(rootDir, "*", SearchOption.AllDirectories))
+                {
+                    try
+                    {
+                        var fi = new FileInfo(path);
+                        sum += fi.Length;
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return sum;
+        }
+
+        private void UpdateMemoryReleaseStatus(string timeText, string messageText, bool isError = false)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => UpdateMemoryReleaseStatus(timeText, messageText, isError)));
+                return;
+            }
+            if (lblLastMemoryReleaseTime != null)
+                lblLastMemoryReleaseTime.Text = "上次切换：" + timeText;
+            if (lblLastMemoryReleaseMessage != null)
+            {
+                lblLastMemoryReleaseMessage.Text = messageText ?? "";
+                lblLastMemoryReleaseMessage.ForeColor =
+                    isError ? Color.DarkRed : Color.FromArgb(96, 96, 96);
+            }
+        }
+
+        private void TabControl1_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            try
+            {
+                ApplyWebViewMemoryTargets();
+            }
+            catch
+            {
+                // 忽略
+            }
+        }
+
+        /// <summary>
+        /// 按钮文案：当前为低内存时显示「正常模式」（点击切回），否则显示「低内存模式」。
+        /// </summary>
+        private void SyncPowerModeButtonText()
+        {
+            if (btnReduceMemory == null) return;
+            btnReduceMemory.Text = backgroundMemorySaverEnabled ? "正常模式" : "低内存模式";
+        }
+
+        private void ApplyWebViewMemoryTargets()
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(ApplyWebViewMemoryTargets));
+                return;
+            }
+
+            foreach (var ctx in browserContexts)
+            {
+                var wv = ctx.WebView;
+                if (wv == null || wv.IsDisposed || wv.CoreWebView2 == null) continue;
+                try
+                {
+                    var core = wv.CoreWebView2;
+                    if (backgroundMemorySaverEnabled)
+                    {
+                        core.MemoryUsageTargetLevel =
+                            CoreWebView2MemoryUsageTargetLevel.Low;
+                        core.IsMuted = true;
+                    }
+                    else
+                    {
+                        core.MemoryUsageTargetLevel =
+                            CoreWebView2MemoryUsageTargetLevel.Normal;
+                        core.IsMuted = false;
+                    }
+                }
+                catch
+                {
+                    // 个别 WebView 状态异常时跳过
+                }
+            }
+        }
+
         private void BtnNavigate_Click(object sender, EventArgs e)
         {
             if (tabControl1.SelectedTab == null)
@@ -158,7 +574,7 @@ namespace EageSoop
         {
             if (tabControl1.TabPages.Count >= MaxTabsPerClient)
             {
-                MessageBox.Show("最多只能打开 10 个标签页。");
+                MessageBox.Show($"最多只能打开 {MaxTabsPerClient} 个标签页。");
                 return;
             }
 
@@ -229,12 +645,14 @@ namespace EageSoop
                 Name = userId,
                 WebView = webView,
                 Tab = tab,
+                UserDataFolderPath = profilePath,
                 CurrentUrl = url,
                 LastNavigatedUrl = url,
                 LastNavigatedAtUtc = DateTime.UtcNow
             });
 
             tabControl1.SelectedTab = tab;
+            ApplyWebViewMemoryTargets();
         }
 
         private void btnRemoveTab_Click_1(object sender, EventArgs e)
@@ -341,6 +759,8 @@ namespace EageSoop
             public string Name { get; set; }
             public WebView2 WebView { get; set; }
             public TabPage Tab { get; set; }
+            /// <summary>创建 WebView 环境时传入的用户数据目录（用于定位 EBWebView\Default 下的 Cache）。</summary>
+            public string UserDataFolderPath { get; set; }
             public string CurrentUrl { get; set; }
             public string LastNavigatedUrl { get; set; }
             public DateTime LastNavigatedAtUtc { get; set; }
@@ -485,7 +905,7 @@ namespace EageSoop
                     agentId = agentId,
                     name = string.IsNullOrWhiteSpace(agentName) ? Environment.MachineName : agentName,
                     host = Environment.MachineName,
-                    capacity = 10
+                    capacity = MaxTabsPerClient
                 };
                 await PostJsonAsync("/api/agents/register", payload);
             }
@@ -575,6 +995,8 @@ namespace EageSoop
         private class CommandPayload
         {
             public string url { get; set; }
+            /// <summary>set_power_mode：low | normal</summary>
+            public string mode { get; set; }
         }
 
         private class LikeScriptResult
@@ -646,7 +1068,8 @@ namespace EageSoop
                     var urlBox = FindTabUrlTextBox(ctx);
                     if (urlBox != null) urlBox.Text = targetUrl;
 
-                    var likeResult = await TryAutoLikeAsync(ctx.WebView, 3, 12000);
+                    await Task.Delay(NextLikeDelayMs(3000, 6000));
+                    var likeResult = await TryAutoLikeAsync(ctx.WebView, 6, 25000);
                     if (!likeResult.ok)
                     {
                         await ReportCommandResultAsync(
@@ -689,6 +1112,63 @@ namespace EageSoop
                     var urlBox = FindTabUrlTextBox(ctx);
                     if (urlBox != null) urlBox.Text = homeUrl;
                     await ReportCommandResultAsync(cmd.id, true, "go_home done");
+                    processedCommandIds.Add(cmd.id);
+                    SaveProcessedCommands();
+                    return;
+                }
+
+                if (string.Equals(cmd.type, "clear_disk_cache", StringComparison.OrdinalIgnoreCase))
+                {
+                    string err;
+                    try
+                    {
+                        err = await ClearDiskCacheForContextAsync(ctx).ConfigureAwait(true);
+                    }
+                    catch (Exception ex)
+                    {
+                        err = ex.Message;
+                    }
+
+                    await RefreshDiskCacheSizeDisplayAsync().ConfigureAwait(true);
+                    if (err == null)
+                    {
+                        await ReportCommandResultAsync(cmd.id, true, "clear_disk_cache ok");
+                    }
+                    else
+                    {
+                        await ReportCommandResultAsync(cmd.id, false, "clear_disk_cache " + err);
+                    }
+                    processedCommandIds.Add(cmd.id);
+                    SaveProcessedCommands();
+                    return;
+                }
+
+                if (string.Equals(cmd.type, "set_power_mode", StringComparison.OrdinalIgnoreCase))
+                {
+                    var raw = (cmd.payload != null ? cmd.payload.mode : null) ?? "";
+                    var wantLow = string.Equals(raw.Trim(), "low", StringComparison.OrdinalIgnoreCase);
+                    backgroundMemorySaverEnabled = wantLow;
+                    ApplyWebViewMemoryTargets();
+                    SyncPowerModeButtonText();
+                    if (backgroundMemorySaverEnabled)
+                    {
+                        UpdateMemoryReleaseStatus(
+                            DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                            "远程：低内存模式（全部标签静音 + 低内存目标）。"
+                        );
+                    }
+                    else
+                    {
+                        UpdateMemoryReleaseStatus(
+                            DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                            "远程：正常模式。"
+                        );
+                    }
+                    await ReportCommandResultAsync(
+                        cmd.id,
+                        true,
+                        "set_power_mode " + (wantLow ? "low" : "normal")
+                    );
                     processedCommandIds.Add(cmd.id);
                     SaveProcessedCommands();
                     return;
@@ -774,6 +1254,16 @@ namespace EageSoop
             };
         }
 
+        private int NextLikeDelayMs(int minMs, int maxMs)
+        {
+            if (maxMs <= minMs) return minMs;
+            lock (likeDelayRandom)
+            {
+                // Next upper bound is exclusive, so +1 for inclusive max value.
+                return likeDelayRandom.Next(minMs, maxMs + 1);
+            }
+        }
+
         private async Task<LikeScriptResult> ExecuteLikeScriptAsync(WebView2 webView)
         {
             try
@@ -782,12 +1272,23 @@ namespace EageSoop
                 string likeScript = @"
 (() => {
   const selectors = [
+    // Newer YouTube layouts (segmented like/dislike)
+    '#segmented-like-button button',
+    'like-button-view-model button',
+    'segmented-like-dislike-button-view-model button:first-of-type',
+    // Classic watch metadata layout
     'ytd-watch-metadata #top-level-buttons-computed ytd-toggle-button-renderer:first-of-type button',
+    'ytd-menu-renderer ytd-toggle-button-renderer:first-of-type button',
+    // Generic localized aria labels
     'button[aria-label*=""like this video""]',
     'button[aria-label*=""Like this video""]',
+    'button[aria-label*=""Me gusta""]',
+    'button[aria-label*=""J’aime""]',
+    'button[aria-label*=""Gefällt mir""]',
     'button[aria-label*=""赞""]',
+    'button[aria-label*=""点赞""]',
     'button[aria-label*=""좋아요""]',
-    'ytd-menu-renderer ytd-toggle-button-renderer:first-of-type button'
+    'button[aria-label*=""いいね""]'
   ];
 
   const visible = (el) => {
@@ -797,12 +1298,46 @@ namespace EageSoop
     return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
   };
 
+  const clickButton = (el, selectorName) => {
+    if (!visible(el) || el.disabled) return null;
+    const pressed = (el.getAttribute('aria-pressed') || '').toLowerCase();
+    if (pressed === 'true') {
+      return { ok: true, selector: selectorName, reason: 'already_liked' };
+    }
+    try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
+    try { el.focus(); } catch (_) {}
+    el.click();
+    return { ok: true, selector: selectorName, reason: 'clicked' };
+  };
+
   for (const sel of selectors) {
     const el = document.querySelector(sel);
-    if (visible(el)) {
-      el.click();
-      return JSON.stringify({ ok: true, selector: sel, reason: 'clicked' });
-    }
+    const result = clickButton(el, sel);
+    if (result) return JSON.stringify(result);
+  }
+
+  // Fallback: scan visible buttons and score candidates by semantics.
+  const yesWords = ['like', 'thumb up', '赞', '点赞', '좋아요', 'いいね', 'me gusta', 'j’aime', 'gefällt mir'];
+  const noWords = ['dislike', 'thumb down', '不喜欢', '싫어요', '低评价', 'down'];
+  const buttons = Array.from(document.querySelectorAll('button'));
+
+  for (const btn of buttons) {
+    if (!visible(btn) || btn.disabled) continue;
+    const raw = [
+      btn.getAttribute('aria-label') || '',
+      btn.getAttribute('title') || '',
+      btn.innerText || '',
+      btn.closest('[id]')?.id || '',
+      btn.closest('[class]')?.className || ''
+    ].join(' ').toLowerCase();
+
+    if (!raw || raw.length < 2) continue;
+    const isLike = yesWords.some(w => raw.includes(w));
+    const isNotLike = noWords.some(w => raw.includes(w));
+    if (!isLike || isNotLike) continue;
+
+    const result = clickButton(btn, 'semantic_button_scan');
+    if (result) return JSON.stringify(result);
   }
 
   // 页面未加载完成时，body 可能还在占位态
@@ -810,7 +1345,17 @@ namespace EageSoop
     return JSON.stringify({ ok: false, reason: 'page_not_ready' });
   }
 
-  return JSON.stringify({ ok: false, reason: 'like_button_not_found' });
+  const debugLabels = buttons
+    .slice(0, 40)
+    .map((b) => (b.getAttribute('aria-label') || b.getAttribute('title') || '').trim())
+    .filter(Boolean)
+    .slice(0, 8);
+
+  return JSON.stringify({
+    ok: false,
+    reason: 'like_button_not_found',
+    selector: debugLabels.join(' | ')
+  });
 })();";
 
                 var raw = await webView.ExecuteScriptAsync(likeScript);

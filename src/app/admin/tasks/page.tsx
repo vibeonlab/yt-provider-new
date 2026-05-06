@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 type Row = {
   commandId: string;
-  type: "open_stream" | "go_home";
+  type: "open_stream" | "go_home" | "clear_disk_cache" | "set_power_mode";
   status: "pending" | "sent" | "done" | "failed";
   message: string;
   agentId: string;

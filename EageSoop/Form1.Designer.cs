@@ -32,6 +32,11 @@ namespace EageSoop
         private System.Windows.Forms.Panel panelButtons;
         private System.Windows.Forms.Button btnAddTab;
         private System.Windows.Forms.Button btnRemoveTab;
+        private System.Windows.Forms.Button btnClearDiskCache;
+        private System.Windows.Forms.Button btnReduceMemory;
+        private System.Windows.Forms.Label lblLastMemoryReleaseTime;
+        private System.Windows.Forms.Label lblLastMemoryReleaseMessage;
+        private System.Windows.Forms.Label lblDiskCacheSize;
         private System.Windows.Forms.TextBox txtAgentName;
         private System.Windows.Forms.Button btnSetAgentName;
         private System.Windows.Forms.TabControl tabControl1;
@@ -50,6 +55,11 @@ namespace EageSoop
             this.btnSetAgentName = new System.Windows.Forms.Button();
             this.btnAddTab = new System.Windows.Forms.Button();
             this.btnRemoveTab = new System.Windows.Forms.Button();
+            this.btnClearDiskCache = new System.Windows.Forms.Button();
+            this.btnReduceMemory = new System.Windows.Forms.Button();
+            this.lblLastMemoryReleaseTime = new System.Windows.Forms.Label();
+            this.lblLastMemoryReleaseMessage = new System.Windows.Forms.Label();
+            this.lblDiskCacheSize = new System.Windows.Forms.Label();
             this.tabControl1 = new System.Windows.Forms.TabControl();
             this.panelUrlInput.SuspendLayout();
             this.panelButtons.SuspendLayout();
@@ -94,23 +104,28 @@ namespace EageSoop
             this.panelButtons.Controls.Add(this.btnSetAgentName);
             this.panelButtons.Controls.Add(this.btnAddTab);
             this.panelButtons.Controls.Add(this.btnRemoveTab);
+            this.panelButtons.Controls.Add(this.btnClearDiskCache);
+            this.panelButtons.Controls.Add(this.btnReduceMemory);
+            this.panelButtons.Controls.Add(this.lblLastMemoryReleaseTime);
+            this.panelButtons.Controls.Add(this.lblLastMemoryReleaseMessage);
+            this.panelButtons.Controls.Add(this.lblDiskCacheSize);
             this.panelButtons.Dock = System.Windows.Forms.DockStyle.Top;
             this.panelButtons.Location = new System.Drawing.Point(0, 45);
             this.panelButtons.Name = "panelButtons";
             this.panelButtons.Padding = new System.Windows.Forms.Padding(5);
-            this.panelButtons.Size = new System.Drawing.Size(1280, 40);
+            this.panelButtons.Size = new System.Drawing.Size(1280, 68);
             this.panelButtons.TabIndex = 1;
             // 
             // txtAgentName
             // 
-            this.txtAgentName.Location = new System.Drawing.Point(875, 6);
+            this.txtAgentName.Location = new System.Drawing.Point(875, 10);
             this.txtAgentName.Name = "txtAgentName";
             this.txtAgentName.Size = new System.Drawing.Size(280, 27);
             this.txtAgentName.TabIndex = 2;
             // 
             // btnSetAgentName
             // 
-            this.btnSetAgentName.Location = new System.Drawing.Point(1161, 5);
+            this.btnSetAgentName.Location = new System.Drawing.Point(1161, 9);
             this.btnSetAgentName.Name = "btnSetAgentName";
             this.btnSetAgentName.Size = new System.Drawing.Size(100, 26);
             this.btnSetAgentName.TabIndex = 3;
@@ -121,7 +136,7 @@ namespace EageSoop
             // btnAddTab
             // 
             this.btnAddTab.AutoSize = true;
-            this.btnAddTab.Location = new System.Drawing.Point(10, 5);
+            this.btnAddTab.Location = new System.Drawing.Point(10, 9);
             this.btnAddTab.Name = "btnAddTab";
             this.btnAddTab.Size = new System.Drawing.Size(94, 30);
             this.btnAddTab.TabIndex = 0;
@@ -131,20 +146,82 @@ namespace EageSoop
             // btnRemoveTab
             // 
             this.btnRemoveTab.AutoSize = true;
-            this.btnRemoveTab.Location = new System.Drawing.Point(110, 5);
+            this.btnRemoveTab.Location = new System.Drawing.Point(110, 9);
             this.btnRemoveTab.Name = "btnRemoveTab";
             this.btnRemoveTab.Size = new System.Drawing.Size(115, 30);
             this.btnRemoveTab.TabIndex = 1;
             this.btnRemoveTab.Text = "Remove Tab";
             this.btnRemoveTab.Click += new System.EventHandler(this.BtnRemoveTab_Click);
             // 
+            // btnClearDiskCache
+            // 
+            this.btnClearDiskCache.AutoSize = true;
+            this.btnClearDiskCache.Location = new System.Drawing.Point(231, 9);
+            this.btnClearDiskCache.Name = "btnClearDiskCache";
+            this.btnClearDiskCache.Size = new System.Drawing.Size(94, 30);
+            this.btnClearDiskCache.TabIndex = 7;
+            this.btnClearDiskCache.Text = "清理缓存";
+            this.btnClearDiskCache.UseVisualStyleBackColor = true;
+            this.btnClearDiskCache.Click += new System.EventHandler(this.BtnClearDiskCache_Click);
+            // 
+            // btnReduceMemory
+            // 
+            this.btnReduceMemory.AutoSize = true;
+            this.btnReduceMemory.Location = new System.Drawing.Point(336, 9);
+            this.btnReduceMemory.Name = "btnReduceMemory";
+            this.btnReduceMemory.Size = new System.Drawing.Size(112, 30);
+            this.btnReduceMemory.TabIndex = 4;
+            this.btnReduceMemory.Text = "低内存模式";
+            this.btnReduceMemory.UseVisualStyleBackColor = true;
+            this.btnReduceMemory.Click += new System.EventHandler(this.BtnReduceMemory_Click);
+            // 
+            // lblLastMemoryReleaseTime
+            // 
+            this.lblLastMemoryReleaseTime.AutoSize = true;
+            this.lblLastMemoryReleaseTime.Font = new System.Drawing.Font("微软雅黑", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.lblLastMemoryReleaseTime.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(64)))), ((int)(((byte)(64)))), ((int)(((byte)(64)))));
+            this.lblLastMemoryReleaseTime.Location = new System.Drawing.Point(458, 8);
+            this.lblLastMemoryReleaseTime.Name = "lblLastMemoryReleaseTime";
+            this.lblLastMemoryReleaseTime.Size = new System.Drawing.Size(95, 16);
+            this.lblLastMemoryReleaseTime.TabIndex = 5;
+            this.lblLastMemoryReleaseTime.Text = "上次切换：—";
+            // 
+            // lblLastMemoryReleaseMessage
+            // 
+            this.lblLastMemoryReleaseMessage.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left)
+            | System.Windows.Forms.AnchorStyles.Right)));
+            this.lblLastMemoryReleaseMessage.AutoEllipsis = true;
+            this.lblLastMemoryReleaseMessage.AutoSize = false;
+            this.lblLastMemoryReleaseMessage.Font = new System.Drawing.Font("微软雅黑", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.lblLastMemoryReleaseMessage.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(96)))), ((int)(((byte)(96)))), ((int)(((byte)(96)))));
+            this.lblLastMemoryReleaseMessage.Location = new System.Drawing.Point(458, 26);
+            this.lblLastMemoryReleaseMessage.Name = "lblLastMemoryReleaseMessage";
+            this.lblLastMemoryReleaseMessage.Size = new System.Drawing.Size(405, 17);
+            this.lblLastMemoryReleaseMessage.TabIndex = 6;
+            this.lblLastMemoryReleaseMessage.Text = "当前为正常模式，点击左侧「低内存模式」可切换。";
+            // 
+            // lblDiskCacheSize
+            // 
+            this.lblDiskCacheSize.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left)
+            | System.Windows.Forms.AnchorStyles.Right)));
+            this.lblDiskCacheSize.AutoEllipsis = true;
+            this.lblDiskCacheSize.AutoSize = false;
+            this.lblDiskCacheSize.Font = new System.Drawing.Font("微软雅黑", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.lblDiskCacheSize.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(70)))), ((int)(((byte)(70)))), ((int)(((byte)(120)))));
+            this.lblDiskCacheSize.Location = new System.Drawing.Point(10, 46);
+            this.lblDiskCacheSize.Name = "lblDiskCacheSize";
+            this.lblDiskCacheSize.Size = new System.Drawing.Size(853, 17);
+            this.lblDiskCacheSize.TabIndex = 8;
+            this.lblDiskCacheSize.Text = "磁盘缓存（估算）：— MB（启动后自动刷新）";
+            // 
             // tabControl1
             // 
             this.tabControl1.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.tabControl1.Location = new System.Drawing.Point(0, 85);
+            this.tabControl1.Location = new System.Drawing.Point(0, 113);
             this.tabControl1.Name = "tabControl1";
             this.tabControl1.SelectedIndex = 0;
-            this.tabControl1.Size = new System.Drawing.Size(1280, 775);
+            this.tabControl1.SelectedIndexChanged += new System.EventHandler(this.TabControl1_SelectedIndexChanged);
+            this.tabControl1.Size = new System.Drawing.Size(1280, 747);
             this.tabControl1.TabIndex = 0;
             // 
             // Form1
