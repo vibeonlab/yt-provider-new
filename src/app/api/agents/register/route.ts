@@ -27,6 +27,13 @@ export async function POST(req: Request) {
     capacity,
   });
 
-  return NextResponse.json({ ok: true, data: result });
+  if (!result.ok) {
+    return NextResponse.json(
+      { ok: false, error: result.error },
+      { status: 502 },
+    );
+  }
+
+  return NextResponse.json({ ok: true, data: { agentId: result.agentId } });
 }
 

@@ -251,12 +251,28 @@ function normalizeAgentStatuses(data: AgentStore): AgentStore {
   return { agents: nextAgents };
 }
 
+export type RegisterAgentResult =
+  | { ok: true; agentId: string }
+  | { ok: false; error: string };
+
+function formatSupabaseError(err: {
+  message?: string;
+  details?: string;
+  hint?: string;
+  code?: string;
+}): string {
+  const parts = [err.message, err.details, err.hint, err.code]
+    .map((s) => (typeof s === "string" ? s.trim() : ""))
+    .filter(Boolean);
+  return parts.join(" — ") || "数据库写入失败";
+}
+
 export async function registerAgent(input: {
   agentId?: string;
   name: string;
   host: string;
   capacity: number;
-}) {
+}): Promise<RegisterAgentResult> {
   const admin = getSupabaseAdmin();
   if (admin) {
     const agentId =
@@ -274,7 +290,10 @@ export async function registerAgent(input: {
       },
       { onConflict: "agent_id" },
     );
-    if (!error) return { agentId };
+    if (error) {
+      return { ok: false, error: formatSupabaseError(error) };
+    }
+    return { ok: true, agentId };
   }
 
   const now = new Date().toISOString();
@@ -308,7 +327,7 @@ export async function registerAgent(input: {
   }
 
   await writeStore(next);
-  return { agentId };
+  return { ok: true, agentId };
 }
 
 export async function updateHeartbeat(agentId: string) {

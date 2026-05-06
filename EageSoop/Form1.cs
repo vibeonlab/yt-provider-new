@@ -896,7 +896,42 @@ namespace EageSoop
             catch { }
         }
 
-        private async Task RegisterAgentAsync()
+        private class RegisterApiResponse
+        {
+            public bool ok { get; set; }
+            public string error { get; set; }
+            public RegisterApiData data { get; set; }
+        }
+
+        private class RegisterApiData
+        {
+            public string agentId { get; set; }
+        }
+
+        private void ShowRegisterFailure(string message)
+        {
+            var text =
+                "向管理后台注册客户端失败。\n\n"
+                + (message ?? "")
+                + "\n\n请检查 ServerBaseUrl、网络与管理端（如 Supabase Service Role、RLS）配置。";
+            if (InvokeRequired)
+            {
+                BeginInvoke(
+                    new Action(() =>
+                        MessageBox.Show(
+                            text,
+                            "注册失败",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Error)));
+            }
+            else
+            {
+                MessageBox.Show(text, "注册失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        /// <returns>是否已成功向服务器注册</returns>
+        private async Task<bool> RegisterAgentAsync()
         {
             try
             {
@@ -907,11 +942,50 @@ namespace EageSoop
                     host = Environment.MachineName,
                     capacity = MaxTabsPerClient
                 };
-                await PostJsonAsync("/api/agents/register", payload);
+                var fullUrl = serverBaseUrl + "/api/agents/register";
+                var body = json.Serialize(payload);
+                using (var content = new StringContent(body, Encoding.UTF8, "application/json"))
+                {
+                    var response = await httpClient.PostAsync(fullUrl, content);
+                    var raw = await response.Content.ReadAsStringAsync();
+                    RegisterApiResponse parsed = null;
+                    try
+                    {
+                        parsed = json.Deserialize<RegisterApiResponse>(raw);
+                    }
+                    catch
+                    {
+                        // 保留 raw 展示
+                    }
+
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        var detail =
+                            parsed != null && !string.IsNullOrWhiteSpace(parsed.error)
+                                ? parsed.error
+                                : raw;
+                        ShowRegisterFailure("HTTP " + (int)response.StatusCode + ": " + detail);
+                        return false;
+                    }
+
+                    if (parsed == null || !parsed.ok)
+                    {
+                        ShowRegisterFailure(
+                            parsed != null && !string.IsNullOrWhiteSpace(parsed.error)
+                                ? parsed.error
+                                : (raw ?? "未知错误"));
+                        return false;
+                    }
+
+                    if (parsed.data != null && !string.IsNullOrWhiteSpace(parsed.data.agentId))
+                        agentId = parsed.data.agentId.Trim();
+                    return true;
+                }
             }
-            catch
+            catch (Exception ex)
             {
-                // 忽略临时网络失败，后续心跳会继续尝试
+                ShowRegisterFailure(ex.Message);
+                return false;
             }
         }
 
@@ -926,7 +1000,8 @@ namespace EageSoop
 
             SaveAgentName(nextName);
             UpdateWindowTitle();
-            await RegisterAgentAsync();
+            if (!await RegisterAgentAsync())
+                return;
             await ReportStatusAsync();
             MessageBox.Show("程序名称已更新。");
         }
