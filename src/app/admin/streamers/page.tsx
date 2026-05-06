@@ -321,12 +321,11 @@ export default function StreamersPage() {
             <input
               type="number"
               min={1}
-              max={10}
               value={form.targetOnlineCount}
               onChange={(e) =>
                 setForm((f) => ({
                   ...f,
-                  targetOnlineCount: Math.max(1, Math.min(10, Number(e.target.value) || 1)),
+                  targetOnlineCount: Math.max(1, Number(e.target.value) || 1),
                 }))
               }
               placeholder="购买上线人数"
@@ -495,15 +494,11 @@ export default function StreamersPage() {
               <input
                 type="number"
                 min={1}
-                max={10}
                 value={editForm.targetOnlineCount}
                 onChange={(e) =>
                   setEditForm((f) => ({
                     ...f,
-                    targetOnlineCount: Math.max(
-                      1,
-                      Math.min(10, Number(e.target.value) || 1),
-                    ),
+                    targetOnlineCount: Math.max(1, Number(e.target.value) || 1),
                   }))
                 }
                 placeholder="购买上线人数"

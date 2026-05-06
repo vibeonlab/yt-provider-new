@@ -85,7 +85,12 @@ export default function RunningPage() {
       current.tabs.push(...nextTabs);
     });
 
-    return Array.from(groups.values());
+    return Array.from(groups.values()).sort((a, b) => {
+      const aId = a.id || "";
+      const bId = b.id || "";
+      if (aId === bId) return 0;
+      return aId < bId ? 1 : -1;
+    });
   }, [items]);
 
   return (

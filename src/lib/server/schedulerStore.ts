@@ -17,6 +17,15 @@ export type StreamerRecord = {
   status: "online" | "offline";
 };
 
+/** 购买上线人数上限（与 PostgreSQL integer 列对齐，避免溢出） */
+const MAX_TARGET_ONLINE_COUNT = 2_147_483_647;
+
+function normalizeTargetOnlineCount(raw: number): number {
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.min(MAX_TARGET_ONLINE_COUNT, n);
+}
+
 export type AssignmentRecord = {
   id: string;
   streamerId: string;
@@ -296,7 +305,7 @@ export async function addStreamer(input: {
   const name = input.name.trim();
   const liveUrl = input.liveUrl.trim();
   const channelId = input.channelId.trim();
-  const targetOnlineCount = Math.max(1, Math.min(10, Math.floor(input.targetOnlineCount)));
+  const targetOnlineCount = normalizeTargetOnlineCount(input.targetOnlineCount);
 
   const admin = getSupabaseAdmin();
   if (admin) {
@@ -389,10 +398,7 @@ export async function updateStreamer(
   const name = input.name.trim();
   const liveUrl = input.liveUrl.trim();
   const channelId = input.channelId.trim();
-  const targetOnlineCount = Math.max(
-    1,
-    Math.min(10, Math.floor(input.targetOnlineCount)),
-  );
+  const targetOnlineCount = normalizeTargetOnlineCount(input.targetOnlineCount);
 
   const admin = getSupabaseAdmin();
   if (admin) {
