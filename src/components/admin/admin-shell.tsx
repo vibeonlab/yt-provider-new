@@ -238,7 +238,8 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
       if (n > 0) {
         showToast({
           variant: "success",
-          message: `已向 ${n} 个浏览器下发清理磁盘缓存指令；客户端收到后即执行（仅 DiskCache，Cookie 与登录保留）。`,
+          message:
+            "已下发清理磁盘缓存指令；客户端收到后即执行（仅 DiskCache，Cookie 与登录保留）。",
         });
       } else {
         showToast({
@@ -281,8 +282,8 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           variant: "success",
           message:
             next === "low"
-              ? `已向 ${n} 个浏览器下发低内存模式指令；客户端收到后将对全部标签生效。`
-              : `已向 ${n} 个浏览器下发正常模式指令；客户端收到后将对全部标签生效。`,
+              ? "已下发低内存模式指令；客户端收到后将对全部标签生效。"
+              : "已下发正常模式指令；客户端收到后将对全部标签生效。",
         });
       } else {
         showToast({
