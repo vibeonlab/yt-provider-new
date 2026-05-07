@@ -73,23 +73,28 @@ type TableSpec = {
   orderCol?: string;
 };
 
+/**
+ * 注意：用 `id` 作为分页排序列，是因为 Supabase 端历史上有些表（比如
+ * browser_slots）没有 `created_at` 列，但所有表都一定有 `id`（admin_auth 主键
+ * 是 `account`，单独写）。`id` 是 UUID，排序值稳定，分页一致。
+ */
 const TABLES: TableSpec[] = [
-  { name: "agents", conflictCols: ["id"], orderCol: "created_at" },
-  { name: "streamers", conflictCols: ["id"], orderCol: "created_at" },
-  { name: "browser_slots", conflictCols: ["id"], orderCol: "created_at" },
+  { name: "agents", conflictCols: ["id"], orderCol: "id" },
+  { name: "streamers", conflictCols: ["id"], orderCol: "id" },
+  { name: "browser_slots", conflictCols: ["id"], orderCol: "id" },
   {
     name: "commands",
     conflictCols: ["id"],
     jsonbCols: ["payload"],
-    orderCol: "created_at",
+    orderCol: "id",
   },
-  { name: "assignments", conflictCols: ["id"], orderCol: "created_at" },
+  { name: "assignments", conflictCols: ["id"], orderCol: "id" },
   { name: "admin_auth", conflictCols: ["account"], orderCol: "account" },
   {
     name: "operation_logs",
     conflictCols: ["id"],
     jsonbCols: ["meta"],
-    orderCol: "created_at",
+    orderCol: "id",
   },
 ];
 

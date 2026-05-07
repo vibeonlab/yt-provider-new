@@ -36,12 +36,36 @@ GRANT ALL ON DATABASE youtube_provider TO yt_app;
 ALTER DATABASE youtube_provider OWNER TO yt_app;
 SQL
 
-# 3) 应用 schema
-cd /var/www/youtube-provider     # 你的项目目录
-sudo -u postgres psql -d youtube_provider -f db/schema.sql
+#Forchat
+sudo -u postgres psql <<'SQL'
+CREATE DATABASE youtube_provider;
+CREATE USER yt_app WITH PASSWORD 'lhcyqopco2';
+GRANT ALL ON DATABASE youtube_provider TO yt_app;
+ALTER DATABASE youtube_provider OWNER TO yt_app;
+\c youtube_provider
+GRANT ALL ON SCHEMA public TO yt_app;
+ALTER SCHEMA public OWNER TO yt_app;
+SQL
 
-# 也可以使用应用账号执行：
-# psql "postgres://yt_app:CHANGE_ME_STRONG_PASSWORD@127.0.0.1:5432/youtube_provider" -f db/schema.sql
+# 3) 应用 schema —— 用应用账号 yt_app 执行，保证表 owner 就是 yt_app
+cd /var/www/youtube-provider     # 你的项目目录
+PGPASSWORD='CHANGE_ME_STRONG_PASSWORD' psql \
+  -h 127.0.0.1 -U yt_app -d youtube_provider -f db/schema.sql
+
+# 如果你已经用 postgres 超级用户建过表（导致 owner=postgres，应用账号没权限），
+# 用下面这段把 owner 改回 yt_app：
+# sudo -u postgres psql -d youtube_provider <<'SQL'
+# DO $$
+# DECLARE r record;
+# BEGIN
+#   FOR r IN SELECT tablename FROM pg_tables WHERE schemaname='public' LOOP
+#     EXECUTE format('ALTER TABLE public.%I OWNER TO yt_app', r.tablename);
+#   END LOOP;
+#   FOR r IN SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema='public' LOOP
+#     EXECUTE format('ALTER SEQUENCE public.%I OWNER TO yt_app', r.sequence_name);
+#   END LOOP;
+# END$$;
+# SQL
 ```
 
 > 建议同时配置 Postgres 监听 `127.0.0.1`、关闭外网监听（默认即如此），避免暴露公网。
@@ -58,6 +82,14 @@ SOURCE_SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
 TARGET_DATABASE_URL=postgres://yt_app:CHANGE_ME_STRONG_PASSWORD@127.0.0.1:5432/youtube_provider
 # 可选：SYNC_TRUNCATE=1 → 同步前清空目标表（默认走 ON CONFLICT 幂等）
 ```
+
+# forchat
+cat > /var/www/youtube-provider/.env <<'EOF'
+SOURCE_SUPABASE_URL=https://jfthkrfmxnrtrnewgunw.supabase.co
+SOURCE_SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpmdGhrcmZteG5ydHJuZXdndW53Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NzQzMDIxMSwiZXhwIjoyMDkzMDA2MjExfQ.SREFqSUzkSqpNvieoL5Sz4UdxrGrUcRUwlvOt018ptY
+TARGET_DATABASE_URL=postgres://yt_app:lhcyqopco2@127.0.0.1:5432/youtube_provider
+EOF
+chmod 600 .env
 
 执行：
 
