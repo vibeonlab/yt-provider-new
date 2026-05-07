@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+const AGENT_PAGE_SIZE = 20;
 
 type AgentRow = {
   agentId: string;
@@ -15,6 +17,7 @@ type AgentRow = {
 export default function SystemPage() {
   const [rows, setRows] = useState<AgentRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [agentPage, setAgentPage] = useState(1);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -87,6 +90,30 @@ export default function SystemPage() {
     void load();
   }
 
+  const sortedAgents = useMemo(
+    () =>
+      [...rows].sort((a, b) =>
+        (a.name || "").localeCompare(b.name || "", "zh-CN", {
+          sensitivity: "base",
+        }),
+      ),
+    [rows],
+  );
+
+  const agentTotalPages = Math.max(
+    1,
+    Math.ceil(sortedAgents.length / AGENT_PAGE_SIZE),
+  );
+
+  const pagedAgents = useMemo(() => {
+    const start = (agentPage - 1) * AGENT_PAGE_SIZE;
+    return sortedAgents.slice(start, start + AGENT_PAGE_SIZE);
+  }, [sortedAgents, agentPage]);
+
+  useEffect(() => {
+    setAgentPage((p) => Math.min(p, agentTotalPages));
+  }, [agentTotalPages]);
+
   return (
     <section>
       <h2 className="text-2xl font-semibold text-zinc-900">系统设置</h2>
@@ -140,7 +167,17 @@ export default function SystemPage() {
         </button>
       </form>
 
-      <div className="mt-5 overflow-x-auto rounded-xl border border-zinc-200 bg-white">
+      <div className="mt-8">
+        <h3 className="text-lg font-medium text-zinc-900">客户端（Agent）列表</h3>
+        {!loading ? (
+          <p className="mt-1 text-xs text-zinc-500">
+            按名称排序，共 {sortedAgents.length} 条，每页 {AGENT_PAGE_SIZE}{" "}
+            条
+          </p>
+        ) : null}
+      </div>
+
+      <div className="mt-3 overflow-x-auto rounded-xl border border-zinc-200 bg-white">
         <table className="w-full min-w-[920px] text-sm">
           <thead className="bg-zinc-100 text-zinc-700">
             <tr>
@@ -161,14 +198,14 @@ export default function SystemPage() {
                   加载中...
                 </td>
               </tr>
-            ) : rows.length === 0 ? (
+            ) : sortedAgents.length === 0 ? (
               <tr>
                 <td className="px-4 py-4 text-zinc-500" colSpan={8}>
                   暂无客户端数据（等待浏览器客户端注册）
                 </td>
               </tr>
             ) : (
-              rows.map((row) => (
+              pagedAgents.map((row) => (
                 <tr key={row.agentId} className="border-t border-zinc-100">
                   <td className="px-4 py-3 text-zinc-700 break-all">{row.agentId}</td>
                   <td className="px-4 py-3 font-medium text-zinc-900">{row.name}</td>
@@ -222,6 +259,35 @@ export default function SystemPage() {
           </tbody>
         </table>
       </div>
+
+      {!loading && sortedAgents.length > 0 ? (
+        <nav
+          className="mt-4 flex flex-wrap items-center justify-center gap-2 text-sm text-zinc-700"
+          aria-label="Agent 列表分页"
+        >
+          <button
+            type="button"
+            disabled={agentPage <= 1}
+            onClick={() => setAgentPage((p) => Math.max(1, p - 1))}
+            className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            上一页
+          </button>
+          <span className="px-2 tabular-nums">
+            {agentPage} / {agentTotalPages}
+          </span>
+          <button
+            type="button"
+            disabled={agentPage >= agentTotalPages}
+            onClick={() =>
+              setAgentPage((p) => Math.min(agentTotalPages, p + 1))
+            }
+            className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            下一页
+          </button>
+        </nav>
+      ) : null}
     </section>
   );
 }

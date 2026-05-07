@@ -798,14 +798,34 @@ export async function goOnline(streamerId: string) {
       return { ok: true as const, allocated: 0, currentOnlineCount: current };
     }
 
-    const { data: freeSlots } = await admin
+    /** 空闲槽以「已连接 + 当前无任何 running 占用」为准；避免仅依赖 state 字段与 assignment 不同步时只能选到 1 条 idle */
+    const { data: candidateSlots } = await admin
       .from("browser_slots")
       .select("id,agent_id,browser_id")
       .in("agent_id", onlineAgentIds)
       .eq("connected", true)
-      .eq("state", "idle")
-      .limit(needed);
-    const selected = freeSlots || [];
+      .order("id", { ascending: true });
+    const candidates = candidateSlots || [];
+    const candidateIds = candidates.map((s) => s.id as string).filter(Boolean);
+    let busySlotIds = new Set<string>();
+    if (candidateIds.length > 0) {
+      const { data: busyRows } = await admin
+        .from("assignments")
+        .select("browser_slot_id")
+        .eq("status", "running")
+        .in("browser_slot_id", candidateIds);
+      busySlotIds = new Set(
+        (busyRows || [])
+          .map((r) => r.browser_slot_id as string)
+          .filter(Boolean),
+      );
+    }
+    const selected = candidates
+      .filter((s) => !busySlotIds.has(s.id as string))
+      .slice(0, needed);
+    const freePoolSize = candidates.filter(
+      (s) => !busySlotIds.has(s.id as string),
+    ).length;
 
     for (const slot of selected) {
       const commandId = newId("cmd");
@@ -851,10 +871,16 @@ export async function goOnline(streamerId: string) {
     await writeOperationLog({
       module: "主播设置",
       action: "主播上线",
-      detail: `streamer=${streamerId}, allocated=${selected.length}, current=${nextCurrent}`,
+      detail: `streamer=${streamerId}, needed=${needed}, freePool=${freePoolSize}, allocated=${selected.length}, current=${nextCurrent}`,
       operator: "ytadmin",
       level: selected.length > 0 ? "info" : "warning",
-      meta: { streamerId, allocated: selected.length, currentOnlineCount: nextCurrent },
+      meta: {
+        streamerId,
+        needed,
+        freePool: freePoolSize,
+        allocated: selected.length,
+        currentOnlineCount: nextCurrent,
+      },
     });
     if (selected.length > 0) {
       const uuids = [...new Set(selected.map((s) => s.agent_id as string))];
