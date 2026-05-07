@@ -39,10 +39,25 @@ export function attachAgentWebSocketServer(server: Server) {
         return;
       }
 
+      /** 关键：去掉 Node http.Server 在 upgrade 后仍可能继承到 socket 上的 timeout，
+       * 否则一些 Node 版本会因 keepAliveTimeout/headersTimeout 在握手后立即踢断（1006）。 */
+      try {
+        socket.setTimeout(0);
+        socket.setKeepAlive(true, 30_000);
+        socket.setNoDelay(true);
+      } catch {
+        /* ignore */
+      }
+
+      console.log(
+        `[agent-ws] upgrade accepted agentId=${agentId} remote=${socket.remoteAddress}:${socket.remotePort}`,
+      );
+
       wss.handleUpgrade(req, socket, head, (ws) => {
         void handleNewAgentSocket(ws, agentId);
       });
-    } catch {
+    } catch (err) {
+      console.error("[agent-ws] upgrade error", err);
       try {
         socket.destroy();
       } catch {
@@ -57,6 +72,15 @@ async function handleNewAgentSocket(
   agentId: string,
 ) {
   setAgentSocket(agentId, ws);
+
+  ws.on("close", (code, reason) => {
+    console.log(
+      `[agent-ws] close agentId=${agentId} code=${code} reason=${reason?.toString() || ""}`,
+    );
+  });
+  ws.on("error", (err) => {
+    console.error(`[agent-ws] error agentId=${agentId}`, err);
+  });
 
   ws.on("message", (raw) => {
     incrementWsRequest();
@@ -79,9 +103,13 @@ async function handleNewAgentSocket(
 
   try {
     ws.send(JSON.stringify({ type: "welcome", agentId }));
-  } catch {
-    /* ignore */
+  } catch (err) {
+    console.error(`[agent-ws] welcome send failed agentId=${agentId}`, err);
   }
 
-  await flushAgentCommandSockets([agentId]);
+  try {
+    await flushAgentCommandSockets([agentId]);
+  } catch (err) {
+    console.error(`[agent-ws] flush failed agentId=${agentId}`, err);
+  }
 }
