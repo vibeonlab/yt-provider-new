@@ -89,7 +89,17 @@ const TABLES: TableSpec[] = [
     orderCol: "id",
   },
   { name: "assignments", conflictCols: ["id"], orderCol: "id" },
-  { name: "admin_auth", conflictCols: ["account"], orderCol: "account" },
+  {
+    name: "admin_auth",
+    conflictCols: ["account"],
+    orderCol: "account",
+    /**
+     * Supabase 上 admin_auth 历史表多了一个 `id` 列，本地新 schema 用 account
+     * 做主键，没有 id 列。迁移时只取业务列，避免 INSERT 时出现 column "id"
+     * does not exist。
+     */
+    selectCols: "account,password_hash,updated_at",
+  },
   {
     name: "operation_logs",
     conflictCols: ["id"],
