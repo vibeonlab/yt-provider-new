@@ -15,6 +15,9 @@ using System.Threading;
 using System.Net.WebSockets;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
+// 关键：把 ClientWebSocket 重定向到 System.Net.WebSockets.Client.Managed 的纯托管实现，
+// 让 Win7（不支持系统级 WebSocket）也能用。其余 WebSocket* 类型仍来自 System.Net.WebSockets。
+using ClientWebSocket = System.Net.WebSockets.Managed.ClientWebSocket;
 
 namespace EageSoop
 {
@@ -30,6 +33,7 @@ namespace EageSoop
         private System.Windows.Forms.Timer statusTimer;
         private System.Windows.Forms.Timer commandTimer;
         private bool useAgentWebSocket = true;
+        private bool wsPlatformUnsupported;
         private ClientWebSocket agentRealtimeSocket;
         private CancellationTokenSource agentRealtimeReceiveCts;
         private Task agentRealtimeReceiveTask;
@@ -957,9 +961,18 @@ namespace EageSoop
 
             if (!useAgentWebSocket)
             {
-                lblAgentTransport.Text =
-                    "调度通道：HTTP 轮询（已在 App.config 将 UseAgentWebSocket 设为 false）";
-                lblAgentTransport.ForeColor = Color.FromArgb(96, 96, 96);
+                if (wsPlatformUnsupported)
+                {
+                    lblAgentTransport.Text =
+                        "调度通道：HTTP 轮询（当前操作系统不支持 WebSocket，已自动回退；建议升级到 Windows 8 及以上）";
+                    lblAgentTransport.ForeColor = Color.FromArgb(160, 85, 20);
+                }
+                else
+                {
+                    lblAgentTransport.Text =
+                        "调度通道：HTTP 轮询（已在 App.config 将 UseAgentWebSocket 设为 false）";
+                    lblAgentTransport.ForeColor = Color.FromArgb(96, 96, 96);
+                }
                 return;
             }
 
@@ -1022,10 +1035,41 @@ namespace EageSoop
 
             await StopAgentWebSocketAsync(restartHttpPoll: false).ConfigureAwait(true);
 
-            var ws = new ClientWebSocket();
+            ClientWebSocket ws;
+            try
+            {
+                ws = new ClientWebSocket();
+            }
+            catch (PlatformNotSupportedException)
+            {
+                /** 接入了 System.Net.WebSockets.Client.Managed（纯托管实现，支持 Win7+），
+                 *  这里理论上不会再抛 PlatformNotSupportedException；保留兜底降级，避免未知环境硬退出。 */
+                wsPlatformUnsupported = true;
+                useAgentWebSocket = false;
+                StartHttpPollTimers();
+                RefreshAgentTransportDisplay();
+                return;
+            }
+            catch
+            {
+                useAgentWebSocket = false;
+                StartHttpPollTimers();
+                RefreshAgentTransportDisplay();
+                return;
+            }
+
             try
             {
                 await ws.ConnectAsync(new Uri(uriStr), CancellationToken.None).ConfigureAwait(true);
+            }
+            catch (PlatformNotSupportedException)
+            {
+                try { ws.Dispose(); } catch { }
+                wsPlatformUnsupported = true;
+                useAgentWebSocket = false;
+                StartHttpPollTimers();
+                RefreshAgentTransportDisplay();
+                return;
             }
             catch
             {
