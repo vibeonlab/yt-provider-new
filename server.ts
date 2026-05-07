@@ -21,6 +21,18 @@ void (async function main() {
 
   await app.prepare();
 
+  /**
+   * 关键修复：Next.js 16 的 next/dist/server/next.js 中 `getRequestHandler` 会在
+   * 第一次 HTTP 请求时调用 `setupWebSocketHandler`，悄悄给我们这台 http.Server
+   * 再挂一个 `upgrade` 监听器，并对未匹配到路由的 WS upgrade 调用 `socket.end()`，
+   * 直接把我们已升级好的 WebSocket 关掉（症状：握手成功后 ~26ms 出现 1006）。
+   *
+   * 方案：在 prepare 之后立即把内部 `didWebSocketSetup` 置为 true，让 Next.js
+   * 跳过其 upgrade 监听注册，由我们自己的 attachAgentWebSocketServer 全权处理。
+   */
+  const appAsAny = app as unknown as { didWebSocketSetup?: boolean };
+  appAsAny.didWebSocketSetup = true;
+
   const server = http.createServer((req, res) => {
     try {
       const parsedUrl = parse(req.url || "", true);
@@ -34,9 +46,21 @@ void (async function main() {
 
   attachAgentWebSocketServer(server);
 
+  /**
+   * 双保险：万一未来 Next.js 改名或在别处又挂了 upgrade 监听，
+   * 这里把所有非我们 handler 的 upgrade 监听清掉再加回我们的 handler。
+   */
+  const ourUpgradeListeners = server.listeners("upgrade");
+  server.removeAllListeners("upgrade");
+  ourUpgradeListeners.forEach((listener) =>
+    server.on("upgrade", listener as (...args: unknown[]) => void),
+  );
+
   server.listen(port, hostname, () => {
     console.log(
-      `> Ready on http://${hostname}:${port} (agent WebSocket: /api/agents/ws?agentId=...)`,
+      `> Ready on http://${hostname}:${port} (agent WebSocket: /api/agents/ws?agentId=...) — upgrade listeners=${server.listenerCount(
+        "upgrade",
+      )}`,
     );
   });
 })();
