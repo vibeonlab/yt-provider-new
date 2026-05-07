@@ -7,27 +7,32 @@
     "build": "next build",
     "start": "next start",
     "start:ws": "node --import tsx ./server.ts",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:init": "node -e \"require('child_process').execSync('psql \\\"$DATABASE_URL\\\" -f db/schema.sql', { stdio: 'inherit' })\"",
+    "db:sync-from-supabase": "tsx scripts/sync-from-supabase.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.2",
     "@supabase/supabase-js": "^2.105.1",
     "next": "16.2.0",
+    "pg": "^8.20.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "zod": "^4.3.6",
     "tsx": "^4.19.4",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
+    "@tailwindcss/postcss": "^4.2.4",
     "@types/node": "^20",
+    "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/ws": "^8.5.13",
+    "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.0",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "tailwindcss": "^4.2.4",
+    "typescript": "^5.9.3"
   }
 }
