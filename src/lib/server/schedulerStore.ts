@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 import {
+  getDisabledAgentIdSet,
   listAgentBrowserStatuses,
   listBroadcastCommandTargets,
 } from "@/lib/server/agentStore";
@@ -789,11 +790,14 @@ export async function goOnline(streamerId: string) {
       return { ok: true as const, allocated: 0, currentOnlineCount: current };
     }
 
+    const disabled = await getDisabledAgentIdSet();
     const { data: onlineAgents } = await admin
       .from("agents")
-      .select("id")
+      .select("id,agent_id")
       .eq("status", "online");
-    const onlineAgentIds = (onlineAgents || []).map((a) => a.id as string);
+    const onlineAgentIds = (onlineAgents || [])
+      .filter((a) => !disabled.has(((a.agent_id as string) || "").trim()))
+      .map((a) => a.id as string);
     if (onlineAgentIds.length === 0) {
       return { ok: true as const, allocated: 0, currentOnlineCount: current };
     }
@@ -917,6 +921,7 @@ export async function goOnline(streamerId: string) {
   }
 
   const allStatuses = await listAgentBrowserStatuses();
+  const disabled = await getDisabledAgentIdSet();
   const busyKeys = new Set(
     data.assignments
       .filter((a) => a.status === "running")
@@ -925,7 +930,12 @@ export async function goOnline(streamerId: string) {
 
   const free = allStatuses.filter((b) => {
     const key = `${b.agentId}:${b.browserId}`;
-    return b.connected && !busyKeys.has(key);
+    const aid = (b.agentId || "").trim();
+    return (
+      b.connected &&
+      !busyKeys.has(key) &&
+      (aid === "" || !disabled.has(aid))
+    );
   });
 
   const selected = free.slice(0, needed);

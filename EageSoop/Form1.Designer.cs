@@ -37,6 +37,7 @@ namespace EageSoop
         private System.Windows.Forms.Label lblLastMemoryReleaseTime;
         private System.Windows.Forms.Label lblLastMemoryReleaseMessage;
         private System.Windows.Forms.Label lblDiskCacheSize;
+        private System.Windows.Forms.Label lblAgentTransport;
         private System.Windows.Forms.TextBox txtAgentName;
         private System.Windows.Forms.Button btnSetAgentName;
         private System.Windows.Forms.TabControl tabControl1;
@@ -60,6 +61,7 @@ namespace EageSoop
             this.lblLastMemoryReleaseTime = new System.Windows.Forms.Label();
             this.lblLastMemoryReleaseMessage = new System.Windows.Forms.Label();
             this.lblDiskCacheSize = new System.Windows.Forms.Label();
+            this.lblAgentTransport = new System.Windows.Forms.Label();
             this.tabControl1 = new System.Windows.Forms.TabControl();
             this.panelUrlInput.SuspendLayout();
             this.panelButtons.SuspendLayout();
@@ -109,11 +111,12 @@ namespace EageSoop
             this.panelButtons.Controls.Add(this.lblLastMemoryReleaseTime);
             this.panelButtons.Controls.Add(this.lblLastMemoryReleaseMessage);
             this.panelButtons.Controls.Add(this.lblDiskCacheSize);
+            this.panelButtons.Controls.Add(this.lblAgentTransport);
             this.panelButtons.Dock = System.Windows.Forms.DockStyle.Top;
             this.panelButtons.Location = new System.Drawing.Point(0, 45);
             this.panelButtons.Name = "panelButtons";
             this.panelButtons.Padding = new System.Windows.Forms.Padding(5);
-            this.panelButtons.Size = new System.Drawing.Size(1280, 68);
+            this.panelButtons.Size = new System.Drawing.Size(1280, 86);
             this.panelButtons.TabIndex = 1;
             // 
             // txtAgentName
@@ -199,6 +202,19 @@ namespace EageSoop
             this.lblLastMemoryReleaseMessage.TabIndex = 6;
             this.lblLastMemoryReleaseMessage.Text = "当前为正常模式，点击左侧「低内存模式」可切换。";
             // 
+            // lblAgentTransport
+            // 
+            this.lblAgentTransport.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+            | System.Windows.Forms.AnchorStyles.Right)));
+            this.lblAgentTransport.AutoEllipsis = true;
+            this.lblAgentTransport.Font = new System.Drawing.Font("微软雅黑", 8.25F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.lblAgentTransport.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(40)))), ((int)(((byte)(80)))), ((int)(((byte)(40)))));
+            this.lblAgentTransport.Location = new System.Drawing.Point(10, 44);
+            this.lblAgentTransport.Name = "lblAgentTransport";
+            this.lblAgentTransport.Size = new System.Drawing.Size(1251, 18);
+            this.lblAgentTransport.TabIndex = 9;
+            this.lblAgentTransport.Text = "调度通道：—";
+            // 
             // lblDiskCacheSize
             // 
             this.lblDiskCacheSize.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
@@ -206,25 +222,25 @@ namespace EageSoop
             this.lblDiskCacheSize.AutoEllipsis = true;
             this.lblDiskCacheSize.Font = new System.Drawing.Font("微软雅黑", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.lblDiskCacheSize.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(70)))), ((int)(((byte)(70)))), ((int)(((byte)(120)))));
-            this.lblDiskCacheSize.Location = new System.Drawing.Point(10, 46);
+            this.lblDiskCacheSize.Location = new System.Drawing.Point(10, 64);
             this.lblDiskCacheSize.Name = "lblDiskCacheSize";
-            this.lblDiskCacheSize.Size = new System.Drawing.Size(853, 17);
+            this.lblDiskCacheSize.Size = new System.Drawing.Size(1251, 17);
             this.lblDiskCacheSize.TabIndex = 8;
             this.lblDiskCacheSize.Text = "磁盘缓存（估算）：— MB（启动后自动刷新）";
             // 
             // tabControl1
             // 
             this.tabControl1.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.tabControl1.Location = new System.Drawing.Point(0, 113);
+            this.tabControl1.Location = new System.Drawing.Point(0, 131);
             this.tabControl1.Name = "tabControl1";
             this.tabControl1.SelectedIndex = 0;
-            this.tabControl1.Size = new System.Drawing.Size(1280, 747);
+            this.tabControl1.Size = new System.Drawing.Size(1280, 729);
             this.tabControl1.TabIndex = 0;
             this.tabControl1.SelectedIndexChanged += new System.EventHandler(this.TabControl1_SelectedIndexChanged);
             // 
             // Form1
             // 
-            this.ClientSize = new System.Drawing.Size(1280, 860);
+            this.ClientSize = new System.Drawing.Size(1280, 878);
             this.Controls.Add(this.tabControl1);
             this.Controls.Add(this.panelButtons);
             this.Controls.Add(this.panelUrlInput);

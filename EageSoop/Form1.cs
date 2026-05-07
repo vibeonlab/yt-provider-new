@@ -34,6 +34,7 @@ namespace EageSoop
         private CancellationTokenSource agentRealtimeReceiveCts;
         private Task agentRealtimeReceiveTask;
         private System.Windows.Forms.Timer agentRealtimePresenceTimer;
+        private System.Windows.Forms.Timer transportUiTimer;
         private readonly object agentRealtimeSocketLock = new object();
         private string agentId;
         private string serverBaseUrl;
@@ -56,6 +57,7 @@ namespace EageSoop
             LoadAgentConfig();
             LoadProcessedCommands();
             InitializeAgentTimers();
+            RefreshAgentTransportDisplay();
             //InitializeAsync();
         }
 
@@ -97,6 +99,18 @@ namespace EageSoop
 
             try
             {
+                if (transportUiTimer != null)
+                {
+                    transportUiTimer.Stop();
+                    transportUiTimer.Tick -= TransportUiTimer_Tick;
+                    transportUiTimer.Dispose();
+                    transportUiTimer = null;
+                }
+            }
+            catch { }
+
+            try
+            {
                 if (cacheSizeRefreshTimer != null)
                 {
                     cacheSizeRefreshTimer.Stop();
@@ -132,6 +146,7 @@ namespace EageSoop
 
             if (await RegisterAgentAsync().ConfigureAwait(true))
                 await TryStartAgentWebSocketAsync().ConfigureAwait(true);
+            RefreshAgentTransportDisplay();
         }
 
         private async void CacheSizeRefreshTimer_Tick(object sender, EventArgs e)
@@ -914,7 +929,56 @@ namespace EageSoop
             agentRealtimePresenceTimer.Interval = 5000;
             agentRealtimePresenceTimer.Tick += async (s, e) => await SendWsPresenceAsync();
 
+            transportUiTimer = new System.Windows.Forms.Timer();
+            transportUiTimer.Interval = 2000;
+            transportUiTimer.Tick += TransportUiTimer_Tick;
+
             StartHttpPollTimers();
+            transportUiTimer.Start();
+        }
+
+        private void TransportUiTimer_Tick(object sender, EventArgs e)
+        {
+            RefreshAgentTransportDisplay();
+        }
+
+        /// <summary>
+        /// 更新顶部「调度通道」文案：WebSocket 是否已连接、当前走 WS 还是 HTTP。
+        /// </summary>
+        private void RefreshAgentTransportDisplay()
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(RefreshAgentTransportDisplay));
+                return;
+            }
+
+            if (lblAgentTransport == null) return;
+
+            if (!useAgentWebSocket)
+            {
+                lblAgentTransport.Text =
+                    "调度通道：HTTP 轮询（已在 App.config 将 UseAgentWebSocket 设为 false）";
+                lblAgentTransport.ForeColor = Color.FromArgb(96, 96, 96);
+                return;
+            }
+
+            ClientWebSocket ws;
+            lock (agentRealtimeSocketLock)
+            {
+                ws = agentRealtimeSocket;
+            }
+
+            if (ws != null && ws.State == WebSocketState.Open)
+            {
+                lblAgentTransport.Text = "调度通道：WebSocket · 已连接（服务端推送命令）";
+                lblAgentTransport.ForeColor = Color.FromArgb(20, 110, 45);
+                return;
+            }
+
+            lblAgentTransport.Text =
+                "调度通道：HTTP 轮询（WebSocket 未连接或已断开；命令定时 HTTP 拉取）";
+            lblAgentTransport.ForeColor = Color.FromArgb(160, 85, 20);
         }
 
         private void StartHttpPollTimers()
@@ -966,6 +1030,7 @@ namespace EageSoop
             catch
             {
                 try { ws.Dispose(); } catch { }
+                RefreshAgentTransportDisplay();
                 return;
             }
 
@@ -979,6 +1044,7 @@ namespace EageSoop
             var token = agentRealtimeReceiveCts.Token;
             agentRealtimeReceiveTask = Task.Run(() => AgentWebSocketReceiveLoopAsync(token), token);
             agentRealtimePresenceTimer.Start();
+            RefreshAgentTransportDisplay();
         }
 
         private async Task StopAgentWebSocketAsync(bool restartHttpPoll)
@@ -1029,6 +1095,7 @@ namespace EageSoop
             }
 
             if (restartHttpPoll) StartHttpPollTimers();
+            RefreshAgentTransportDisplay();
         }
 
         private async Task SendWsPresenceAsync()
@@ -1287,6 +1354,7 @@ namespace EageSoop
                 return;
             await ReportStatusAsync();
             await TryStartAgentWebSocketAsync();
+            RefreshAgentTransportDisplay();
             MessageBox.Show("程序名称已更新。");
         }
 
