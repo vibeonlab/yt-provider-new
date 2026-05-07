@@ -22,6 +22,7 @@
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
 import { Pool, types } from "pg";
+import WebSocket from "ws";
 
 const SOURCE_URL = process.env.SOURCE_SUPABASE_URL || process.env.SUPABASE_URL;
 const SOURCE_KEY =
@@ -45,8 +46,16 @@ if (!TARGET_DB) {
 types.setTypeParser(1114, (val: string) => val);
 types.setTypeParser(1184, (val: string) => val);
 
+/**
+ * Node 20 没有内置 WebSocket。Supabase v2 在 createClient 时会 eagerly 构造
+ * Realtime 客户端，强制要求一个 WebSocket 实现，所以我们把 `ws` 显式注入。
+ * 这里我们只用 `.from(...)` REST 调用，不会真去触发 realtime 连接。
+ */
 const supabase = createClient(SOURCE_URL, SOURCE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
+  realtime: {
+    transport: WebSocket as unknown as typeof globalThis.WebSocket,
+  },
 });
 const pool = new Pool({ connectionString: TARGET_DB });
 
