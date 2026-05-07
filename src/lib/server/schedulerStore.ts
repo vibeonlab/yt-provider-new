@@ -81,29 +81,50 @@ type SchedulerStore = {
 
 const COMMAND_RETRY_MAX = 2;
 const COMMAND_SENT_TIMEOUT_MS = 20_000;
-const TASK_RETENTION_DAYS = 3;
-
-function tasksRetentionCutoffIso() {
-  return new Date(
-    Date.now() - TASK_RETENTION_DAYS * 24 * 60 * 60 * 1000,
-  ).toISOString();
-}
+/**
+ * 任务（commands）只保留最新 N 条。超出的按 created_at 升序裁剪掉。
+ * 改为 cap 后无论调度多久都不会无限堆积，磁盘/查询性能都更可控。
+ */
+const TASK_RETENTION_COUNT = 1000;
 
 export async function cleanupOldCommandTasks() {
-  const cutoff = tasksRetentionCutoffIso();
   const admin = getSupabaseAdmin();
   if (admin) {
-    const { error } = await admin.from("commands").delete().lt("created_at", cutoff);
+    /**
+     * 取第 (RETENTION+1) 行的 created_at 作为分界点；行数 <= RETENTION 直接返回。
+     * 用 `<` 严格小于删除，可能因为时间戳并列保留几条，可接受。
+     */
+    const { data, error: probeErr } = await admin
+      .from("commands")
+      .select("created_at")
+      .order("created_at", { ascending: false })
+      .limit(TASK_RETENTION_COUNT + 1);
+    if (probeErr) {
+      return { ok: false, mode: "supabase" as const };
+    }
+    if (!data || data.length <= TASK_RETENTION_COUNT) {
+      return { ok: true, mode: "supabase" as const };
+    }
+    const cutoff = (data[TASK_RETENTION_COUNT] as { created_at: string })
+      .created_at;
+    const { error } = await admin
+      .from("commands")
+      .delete()
+      .lt("created_at", cutoff);
     return { ok: !error, mode: "supabase" as const };
   }
 
   const data = await readStore();
-  const nextCommands = data.commands.filter((c) => c.createdAt >= cutoff);
-  const deleted = data.commands.length - nextCommands.length;
-  if (deleted > 0) {
-    data.commands = nextCommands;
-    await saveStore(data);
+  if (data.commands.length <= TASK_RETENTION_COUNT) {
+    return { ok: true, mode: "json" as const, deleted: 0 };
   }
+  const sorted = [...data.commands].sort((a, b) =>
+    a.createdAt < b.createdAt ? 1 : -1,
+  );
+  const nextCommands = sorted.slice(0, TASK_RETENTION_COUNT);
+  const deleted = data.commands.length - nextCommands.length;
+  data.commands = nextCommands;
+  await saveStore(data);
   return { ok: true, mode: "json" as const, deleted };
 }
 
@@ -1105,7 +1126,6 @@ export async function goOffline(streamerId: string) {
 }
 
 export async function listRecentCommandTasks(limit = 300): Promise<CommandTaskView[]> {
-  const cutoff = tasksRetentionCutoffIso();
   const admin = getSupabaseAdmin();
   if (admin) {
     await cleanupOldCommandTasks();
@@ -1114,7 +1134,6 @@ export async function listRecentCommandTasks(limit = 300): Promise<CommandTaskVi
       .select(
         "command_id,type,status,message,created_at,updated_at,streamer_id,agent_id,browser_slot_id",
       )
-      .gte("created_at", cutoff)
       .order("created_at", { ascending: false })
       .limit(limit);
     if (!error && rows) {
@@ -1164,9 +1183,11 @@ export async function listRecentCommandTasks(limit = 300): Promise<CommandTaskVi
   }
 
   const data = await readStore();
-  const nextCommands = data.commands.filter((c) => c.createdAt >= cutoff);
-  if (nextCommands.length !== data.commands.length) {
-    data.commands = nextCommands;
+  if (data.commands.length > TASK_RETENTION_COUNT) {
+    const sorted = [...data.commands].sort((a, b) =>
+      a.createdAt < b.createdAt ? 1 : -1,
+    );
+    data.commands = sorted.slice(0, TASK_RETENTION_COUNT);
     await saveStore(data);
   }
   const streamerMap = new Map(data.streamers.map((s) => [s.id, s.name]));
@@ -1179,7 +1200,7 @@ export async function listRecentCommandTasks(limit = 300): Promise<CommandTaskVi
       },
     ]),
   );
-  return [...nextCommands]
+  return [...data.commands]
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
     .slice(0, limit)
     .map((c) => ({

@@ -15,26 +15,51 @@ export type OperationLogRecord = {
 type LocalLogsStore = {
   logs: OperationLogRecord[];
 };
-const LOG_RETENTION_DAYS = 3;
 
-function retentionCutoffIso() {
-  return new Date(Date.now() - LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
-}
+/**
+ * 操作日志只保留最新 N 条，超出的按 created_at 升序裁剪掉。
+ * （之前是按"保留近 N 天"，会导致量级随时间膨胀；改成 cap 后内存/磁盘
+ * 占用可控。）
+ */
+const LOG_RETENTION_COUNT = 1000;
 
 export async function cleanupOldOperationLogs() {
-  const cutoff = retentionCutoffIso();
   const admin = getSupabaseAdmin();
   if (admin) {
-    const { error } = await admin.from("operation_logs").delete().lt("created_at", cutoff);
+    /**
+     * 取第 (RETENTION+1) 行的 created_at 作为分界点；行数 <= RETENTION 直接返回。
+     * 边界点用 `<` 删，可能因为时间戳并列保留几条，这是可接受的近似。
+     */
+    const { data, error: probeErr } = await admin
+      .from("operation_logs")
+      .select("created_at")
+      .order("created_at", { ascending: false })
+      .limit(LOG_RETENTION_COUNT + 1);
+    if (probeErr) {
+      return { ok: false, mode: "supabase" as const };
+    }
+    if (!data || data.length <= LOG_RETENTION_COUNT) {
+      return { ok: true, mode: "supabase" as const };
+    }
+    const cutoff = (data[LOG_RETENTION_COUNT] as { created_at: string })
+      .created_at;
+    const { error } = await admin
+      .from("operation_logs")
+      .delete()
+      .lt("created_at", cutoff);
     return { ok: !error, mode: "supabase" as const };
   }
 
   const local = await readStore();
-  const nextLogs = local.logs.filter((l) => l.createdAt >= cutoff);
-  const deleted = local.logs.length - nextLogs.length;
-  if (deleted > 0) {
-    await writeStore({ logs: nextLogs });
+  if (local.logs.length <= LOG_RETENTION_COUNT) {
+    return { ok: true, mode: "json" as const, deleted: 0 };
   }
+  const sorted = [...local.logs].sort((a, b) =>
+    a.createdAt < b.createdAt ? 1 : -1,
+  );
+  const nextLogs = sorted.slice(0, LOG_RETENTION_COUNT);
+  const deleted = local.logs.length - nextLogs.length;
+  await writeStore({ logs: nextLogs });
   return { ok: true, mode: "json" as const, deleted };
 }
 
@@ -77,7 +102,6 @@ export async function writeOperationLog(input: {
   const operator = input.operator ?? "system";
   const detail = input.detail ?? "";
   const createdAt = new Date().toISOString();
-  const cutoff = retentionCutoffIso();
   const admin = getSupabaseAdmin();
 
   if (admin) {
@@ -90,7 +114,7 @@ export async function writeOperationLog(input: {
       meta: input.meta ?? {},
     });
     if (!error) {
-      await admin.from("operation_logs").delete().lt("created_at", cutoff);
+      await cleanupOldOperationLogs();
       return;
     }
   }
@@ -105,22 +129,23 @@ export async function writeOperationLog(input: {
     detail,
     createdAt,
   });
-  data.logs = data.logs.filter((l) => l.createdAt >= cutoff);
-  if (data.logs.length > 5000) data.logs = data.logs.slice(0, 5000);
+  if (data.logs.length > LOG_RETENTION_COUNT) {
+    data.logs = data.logs
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+      .slice(0, LOG_RETENTION_COUNT);
+  }
   await writeStore(data);
 }
 
 export async function listOperationLogs() {
-  const cutoff = retentionCutoffIso();
   const admin = getSupabaseAdmin();
   if (admin) {
     await cleanupOldOperationLogs();
     const { data, error } = await admin
       .from("operation_logs")
       .select("id,module,action,level,operator,detail,created_at")
-      .gte("created_at", cutoff)
       .order("created_at", { ascending: false })
-      .limit(1000);
+      .limit(LOG_RETENTION_COUNT);
     if (!error && data) {
       return data.map((row) => ({
         id: row.id as string,
@@ -135,10 +160,14 @@ export async function listOperationLogs() {
   }
 
   const local = await readStore();
-  const nextLogs = local.logs.filter((l) => l.createdAt >= cutoff);
-  if (nextLogs.length !== local.logs.length) {
+  const sorted = [...local.logs].sort((a, b) =>
+    a.createdAt < b.createdAt ? 1 : -1,
+  );
+  if (sorted.length > LOG_RETENTION_COUNT) {
+    const nextLogs = sorted.slice(0, LOG_RETENTION_COUNT);
     await writeStore({ logs: nextLogs });
+    return nextLogs;
   }
-  return [...nextLogs].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  return sorted;
 }
 
