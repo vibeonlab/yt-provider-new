@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+const LOG_PAGE_SIZE = 20;
+
 type LogLevel = "info" | "warning" | "error";
 
 type OperationLog = {
@@ -49,6 +51,7 @@ export default function LogsPage() {
   const [moduleFilter, setModuleFilter] = useState("all");
   const [levelFilter, setLevelFilter] = useState<"all" | LogLevel>("all");
   const [keyword, setKeyword] = useState("");
+  const [page, setPage] = useState(1);
   const maxSelectableDate = formatDateInput(new Date());
   const minSelectableDate = formatDateInput(
     new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
@@ -177,12 +180,33 @@ export default function LogsPage() {
     });
   }, [selectedDate, moduleFilter, levelFilter, keyword, sorted]);
 
-  const groups = filtered.reduce<Record<string, OperationLog[]>>((acc, log) => {
-    const key = dayKey(log.time);
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(log);
-    return acc;
-  }, {});
+  const totalPages = Math.max(1, Math.ceil(filtered.length / LOG_PAGE_SIZE));
+
+  // 分页要在分组之前做：每页固定 20 条，再把当前页内条目按日分组渲染
+  const pagedLogs = useMemo(() => {
+    const start = (page - 1) * LOG_PAGE_SIZE;
+    return filtered.slice(start, start + LOG_PAGE_SIZE);
+  }, [filtered, page]);
+
+  // 筛选条件变化时回到第 1 页
+  useEffect(() => {
+    setPage(1);
+  }, [selectedDate, moduleFilter, levelFilter, keyword]);
+
+  // 数据刷新导致总页数缩水时把当前页夹住
+  useEffect(() => {
+    setPage((p) => Math.min(Math.max(1, p), totalPages));
+  }, [totalPages]);
+
+  const groups = pagedLogs.reduce<Record<string, OperationLog[]>>(
+    (acc, log) => {
+      const key = dayKey(log.time);
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(log);
+      return acc;
+    },
+    {},
+  );
 
   const days = Object.keys(groups).sort((a, b) => (a < b ? 1 : -1));
 
@@ -344,6 +368,34 @@ export default function LogsPage() {
           ))
         )}
       </div>
+
+      {!loading && filtered.length > 0 ? (
+        <nav
+          className="mt-4 flex flex-wrap items-center justify-center gap-2 text-sm text-zinc-700"
+          aria-label="日志分页"
+        >
+          <span className="text-zinc-500">共 {filtered.length} 条</span>
+          <button
+            type="button"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            上一页
+          </button>
+          <span className="px-2 tabular-nums">
+            {page} / {totalPages}
+          </span>
+          <button
+            type="button"
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            下一页
+          </button>
+        </nav>
+      ) : null}
     </section>
   );
 }

@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+const TASK_PAGE_SIZE = 20;
+
 type Row = {
   commandId: string;
   type: "open_stream" | "go_home" | "clear_disk_cache" | "set_power_mode";
@@ -32,6 +34,7 @@ export default function TasksPage() {
     "all" | Row["status"]
   >("all");
   const [keyword, setKeyword] = useState("");
+  const [page, setPage] = useState(1);
 
   async function load() {
     const res = await fetch("/api/tasks/recent?limit=500", { cache: "no-store" });
@@ -72,6 +75,23 @@ export default function TasksPage() {
       return true;
     });
   }, [rows, statusFilter, keyword]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / TASK_PAGE_SIZE));
+
+  const pagedRows = useMemo(() => {
+    const start = (page - 1) * TASK_PAGE_SIZE;
+    return filtered.slice(start, start + TASK_PAGE_SIZE);
+  }, [filtered, page]);
+
+  // 筛选条件变化时回到第 1 页
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter, keyword]);
+
+  // 总页数变化时（数据刷新导致页数缩水）把当前页夹住
+  useEffect(() => {
+    setPage((p) => Math.min(Math.max(1, p), totalPages));
+  }, [totalPages]);
 
   return (
     <section>
@@ -129,7 +149,7 @@ export default function TasksPage() {
                 </td>
               </tr>
             ) : (
-              filtered.map((r) => (
+              pagedRows.map((r) => (
                 <tr key={r.commandId} className="border-t border-zinc-100">
                   <td className="px-4 py-3 text-zinc-600">
                     {r.createdAt
@@ -158,6 +178,34 @@ export default function TasksPage() {
           </tbody>
         </table>
       </div>
+
+      {!loading && filtered.length > 0 ? (
+        <nav
+          className="mt-4 flex flex-wrap items-center justify-center gap-2 text-sm text-zinc-700"
+          aria-label="任务列表分页"
+        >
+          <span className="text-zinc-500">共 {filtered.length} 条</span>
+          <button
+            type="button"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            上一页
+          </button>
+          <span className="px-2 tabular-nums">
+            {page} / {totalPages}
+          </span>
+          <button
+            type="button"
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            下一页
+          </button>
+        </nav>
+      ) : null}
     </section>
   );
 }
