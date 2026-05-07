@@ -4,6 +4,7 @@ import { WebSocketServer } from "ws";
 import { setAgentSocket } from "@/lib/server/agentWsHub";
 import { flushAgentCommandSockets } from "@/lib/server/agentWsFlush";
 import { updateHeartbeat, reportAgentStatus } from "@/lib/server/agentStore";
+import { incrementWsRequest } from "@/lib/server/agentRequestCounters";
 
 type ClientMessage =
   | { type: "heartbeat" }
@@ -58,6 +59,7 @@ async function handleNewAgentSocket(
   setAgentSocket(agentId, ws);
 
   ws.on("message", (raw) => {
+    incrementWsRequest();
     void (async () => {
       try {
         const msg = JSON.parse(String(raw)) as ClientMessage;

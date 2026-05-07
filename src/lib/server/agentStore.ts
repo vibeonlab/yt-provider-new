@@ -673,3 +673,75 @@ export async function setAgentEnabled(agentId: string, enabled: boolean) {
   return { ok: true as const };
 }
 
+/**
+ * 删除一个 Agent 及其调度相关数据。
+ *
+ * Supabase：先释放 assignments、再清理 commands/browser_slots，最后删除 agents 行。
+ * 本地 JSON：移除对应 agent 与其 assignments/commands。
+ * 同时移除 disabled 控制列表里的记录。
+ */
+export async function deleteAgent(agentId: string) {
+  const trimmed = (agentId || "").trim();
+  if (!trimmed) {
+    return { ok: false as const, error: "agentId is required" };
+  }
+
+  let removed = false;
+  const admin = getSupabaseAdmin();
+  if (admin) {
+    const { data: agentRows } = await admin
+      .from("agents")
+      .select("id")
+      .eq("agent_id", trimmed)
+      .limit(1);
+    const agentPk = agentRows?.[0]?.id as string | undefined;
+    if (agentPk) {
+      await admin
+        .from("assignments")
+        .update({ status: "released" })
+        .eq("agent_id", agentPk)
+        .eq("status", "running");
+      await admin.from("commands").delete().eq("agent_id", agentPk);
+      await admin.from("assignments").delete().eq("agent_id", agentPk);
+      await admin.from("browser_slots").delete().eq("agent_id", agentPk);
+      const { error } = await admin.from("agents").delete().eq("id", agentPk);
+      if (!error) removed = true;
+    }
+  }
+
+  try {
+    const data = await readStore();
+    const before = data.agents.length;
+    data.agents = data.agents.filter((a) => a.agentId !== trimmed);
+    if (data.agents.length !== before) removed = true;
+    await writeStore(data);
+  } catch {
+    /* ignore json store errors */
+  }
+
+  try {
+    const controls = await readControlsStore();
+    const set = new Set(controls.disabledAgentIds);
+    if (set.delete(trimmed)) {
+      await writeControlsStore({ disabledAgentIds: [...set] });
+    }
+  } catch {
+    /* ignore */
+  }
+
+  if (!removed) {
+    return { ok: false as const, error: "agent not found" };
+  }
+
+  await writeOperationLog({
+    module: "系统设置",
+    action: "删除 Agent",
+    operator: "ytadmin",
+    level: "warning",
+    detail: `Agent ${trimmed} 已被删除`,
+    meta: { agentId: trimmed },
+  });
+
+  return { ok: true as const };
+}
+

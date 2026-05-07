@@ -24,6 +24,13 @@ export default function SystemPage() {
   const [pwdSubmitting, setPwdSubmitting] = useState(false);
   const [pwdMessage, setPwdMessage] = useState<string | null>(null);
   const [pwdError, setPwdError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AgentRow | null>(null);
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
 
   async function load() {
     const res = await fetch("/api/agents", { cache: "no-store" });
@@ -88,6 +95,49 @@ export default function SystemPage() {
       body: JSON.stringify({ enabled }),
     });
     void load();
+  }
+
+  function showFeedback(type: "success" | "error", text: string) {
+    setFeedback({ type, text });
+    window.setTimeout(() => setFeedback(null), 2400);
+  }
+
+  function openDeleteConfirm(row: AgentRow) {
+    setDeleteError(null);
+    setDeleteTarget(row);
+  }
+
+  function closeDeleteConfirm() {
+    if (deleteSubmitting) return;
+    setDeleteTarget(null);
+    setDeleteError(null);
+  }
+
+  async function confirmDeleteAgent() {
+    if (!deleteTarget || deleteSubmitting) return;
+    setDeleteSubmitting(true);
+    setDeleteError(null);
+    try {
+      const res = await fetch(
+        `/api/agents/${encodeURIComponent(deleteTarget.agentId)}`,
+        { method: "DELETE", credentials: "include" },
+      );
+      const data = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || !data?.ok) {
+        setDeleteError(data?.error || `删除失败（${res.status}）`);
+        return;
+      }
+      const removedName = deleteTarget.name || deleteTarget.agentId;
+      setDeleteTarget(null);
+      await load();
+      showFeedback("success", `已删除 Agent「${removedName}」`);
+    } catch (err) {
+      setDeleteError(
+        err instanceof Error ? err.message : "删除请求异常，请稍后重试",
+      );
+    } finally {
+      setDeleteSubmitting(false);
+    }
   }
 
   const sortedAgents = useMemo(
@@ -188,7 +238,7 @@ export default function SystemPage() {
               <th className="text-left px-4 py-3">在线状态</th>
               <th className="text-left px-4 py-3">调度状态</th>
               <th className="text-left px-4 py-3">最后心跳</th>
-              <th className="text-left px-4 py-3">操作</th>
+              <th className="text-left px-4 py-3 w-44">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -241,17 +291,48 @@ export default function SystemPage() {
                       : "-"}
                   </td>
                   <td className="px-4 py-3">
-                    <button
-                      onClick={() => onToggleAgent(row.agentId, !row.enabled)}
-                      className={[
-                        "rounded-lg text-white px-3 py-1.5",
-                        row.enabled
-                          ? "bg-zinc-700 hover:bg-zinc-800"
-                          : "bg-emerald-600 hover:bg-emerald-700",
-                      ].join(" ")}
-                    >
-                      {row.enabled ? "禁用调度" : "启用调度"}
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onToggleAgent(row.agentId, !row.enabled)}
+                        className={[
+                          "rounded-lg text-white px-3 py-1.5",
+                          row.enabled
+                            ? "bg-zinc-700 hover:bg-zinc-800"
+                            : "bg-emerald-600 hover:bg-emerald-700",
+                        ].join(" ")}
+                      >
+                        {row.enabled ? "禁用调度" : "启用调度"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openDeleteConfirm(row)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-red-700 hover:border-red-300 hover:bg-red-100"
+                        title="删除该 Agent 的全部调度数据"
+                      >
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          aria-hidden="true"
+                        >
+                          <path
+                            d="M4 7h16M9 7V5a2 2 0 012-2h2a2 2 0 012 2v2m3 0v12a2 2 0 01-2 2H7a2 2 0 01-2-2V7"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                          />
+                          <path
+                            d="M10 11v6M14 11v6"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                        删除
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))
@@ -259,6 +340,128 @@ export default function SystemPage() {
           </tbody>
         </table>
       </div>
+
+      {feedback ? (
+        <div
+          className={[
+            "fixed left-1/2 top-6 z-50 -translate-x-1/2 rounded-lg px-4 py-2 text-sm shadow-lg",
+            feedback.type === "success"
+              ? "bg-emerald-600 text-white"
+              : "bg-red-600 text-white",
+          ].join(" ")}
+          role="status"
+        >
+          {feedback.text}
+        </div>
+      ) : null}
+
+      {deleteTarget ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/50 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-agent-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeDeleteConfirm();
+          }}
+        >
+          <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-start gap-4 p-6">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-600">
+                <svg
+                  width="22"
+                  height="22"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M12 8v5"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  />
+                  <circle cx="12" cy="16.5" r="1.1" fill="currentColor" />
+                  <path
+                    d="M10.3 3.3 2.6 17a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 3.3a2 2 0 0 0-3.4 0Z"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </span>
+              <div className="min-w-0">
+                <h4
+                  id="delete-agent-title"
+                  className="text-base font-semibold text-zinc-900"
+                >
+                  确认删除 Agent？
+                </h4>
+                <p className="mt-1 text-sm text-zinc-600">
+                  即将删除
+                  <span className="mx-1 rounded bg-zinc-100 px-1.5 py-0.5 font-medium text-zinc-900">
+                    {deleteTarget.name || deleteTarget.agentId}
+                  </span>
+                  及其调度数据（assignments / commands / browser_slots）。
+                  操作不可恢复。
+                </p>
+                {deleteError ? (
+                  <p className="mt-2 rounded-md bg-red-50 px-2 py-1.5 text-xs text-red-700">
+                    {deleteError}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-zinc-100 bg-zinc-50 px-4 py-3">
+              <button
+                type="button"
+                onClick={closeDeleteConfirm}
+                disabled={deleteSubmitting}
+                className="rounded-lg border border-zinc-300 bg-white px-4 py-1.5 text-sm text-zinc-700 hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmDeleteAgent()}
+                disabled={deleteSubmitting}
+                className="inline-flex items-center gap-1 rounded-lg bg-red-600 px-4 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {deleteSubmitting ? (
+                  <>
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      aria-hidden="true"
+                      className="animate-spin"
+                    >
+                      <circle
+                        cx="12"
+                        cy="12"
+                        r="9"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeOpacity="0.3"
+                      />
+                      <path
+                        d="M21 12a9 9 0 0 0-9-9"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                    删除中…
+                  </>
+                ) : (
+                  "确认删除"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {!loading && sortedAgents.length > 0 ? (
         <nav

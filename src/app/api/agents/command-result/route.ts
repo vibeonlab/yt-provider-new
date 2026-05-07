@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { markCommandResult } from "@/lib/server/schedulerStore";
+import { incrementHttpRequest } from "@/lib/server/agentRequestCounters";
 
 type Body = {
   commandId: string;
@@ -8,6 +9,7 @@ type Body = {
 };
 
 export async function POST(req: Request) {
+  incrementHttpRequest();
   const body = (await req.json()) as Body;
   const commandId = body?.commandId?.trim();
   if (!commandId) {

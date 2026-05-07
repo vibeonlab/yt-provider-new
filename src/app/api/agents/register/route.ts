@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { registerAgent } from "@/lib/server/agentStore";
+import { incrementHttpRequest } from "@/lib/server/agentRequestCounters";
 
 type Body = {
   agentId?: string;
@@ -9,6 +10,7 @@ type Body = {
 };
 
 export async function POST(req: Request) {
+  incrementHttpRequest();
   const body = (await req.json()) as Body;
   const name = body?.name?.trim();
   if (!name) {

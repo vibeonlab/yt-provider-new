@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { updateHeartbeat } from "@/lib/server/agentStore";
+import { incrementHttpRequest } from "@/lib/server/agentRequestCounters";
 
 type Body = {
   agentId: string;
 };
 
 export async function POST(req: Request) {
+  incrementHttpRequest();
   const body = (await req.json()) as Body;
   const agentId = body?.agentId?.trim();
   if (!agentId) {

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { reportAgentStatus } from "@/lib/server/agentStore";
+import { incrementHttpRequest } from "@/lib/server/agentRequestCounters";
 
 type Body = {
   agentId: string;
@@ -15,6 +16,7 @@ type Body = {
 };
 
 export async function POST(req: Request) {
+  incrementHttpRequest();
   const body = (await req.json()) as Body;
   const agentId = body?.agentId?.trim();
   const browsers = body?.browsers ?? [];

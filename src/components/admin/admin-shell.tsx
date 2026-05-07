@@ -139,6 +139,16 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const [powerMode, setPowerMode] = useState<"low" | "normal">("normal");
   const [cacheBusy, setCacheBusy] = useState(false);
   const [powerBusy, setPowerBusy] = useState(false);
+  const [requestStats, setRequestStats] = useState<{
+    http: number;
+    ws: number;
+    resetAt: string;
+  }>({
+    http: 0,
+    ws: 0,
+    resetAt: "",
+  });
+  const [resetCounterBusy, setResetCounterBusy] = useState(false);
   const [toast, setToast] = useState<ToastPayload | null>(null);
   const toastDismissRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -207,6 +217,38 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    let active = true;
+    const loadCounters = async () => {
+      try {
+        const res = await fetch("/api/admin/agent-request-stats", {
+          cache: "no-store",
+          credentials: "include",
+        });
+        const data = (await res.json()) as {
+          ok?: boolean;
+          data?: { http?: number; ws?: number; resetAt?: string };
+        };
+        if (!active || !data?.ok || !data.data) return;
+        setRequestStats({
+          http: Number(data.data.http) || 0,
+          ws: Number(data.data.ws) || 0,
+          resetAt: data.data.resetAt || "",
+        });
+      } catch {
+        /* ignore counter fetch errors */
+      }
+    };
+    void loadCounters();
+    const timer = window.setInterval(() => {
+      void loadCounters();
+    }, 2500);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
     return () => {
       if (toastDismissRef.current) clearTimeout(toastDismissRef.current);
     };
@@ -250,6 +292,39 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
       }
     } finally {
       setCacheBusy(false);
+    }
+  }
+
+  async function resetRequestCounters() {
+    if (resetCounterBusy) return;
+    setResetCounterBusy(true);
+    try {
+      const res = await fetch("/api/admin/agent-request-stats", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reset" }),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        data?: { http?: number; ws?: number; resetAt?: string };
+      };
+      if (!res.ok || !data?.ok) {
+        showToast({
+          variant: "error",
+          message: data?.error || `清零失败（${res.status}）`,
+        });
+        return;
+      }
+      setRequestStats({
+        http: Number(data.data?.http) || 0,
+        ws: Number(data.data?.ws) || 0,
+        resetAt: data.data?.resetAt || new Date().toISOString(),
+      });
+      showToast({ variant: "success", message: "已清零浏览器程序请求计数" });
+    } finally {
+      setResetCounterBusy(false);
     }
   }
 
@@ -386,6 +461,88 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           </div>
 
           <div className="flex min-w-0 flex-1 flex-wrap items-center justify-center gap-x-3 gap-y-2">
+            <div
+              className="inline-flex shrink-0 items-stretch overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-sm"
+              title={
+                requestStats.resetAt
+                  ? `自 ${new Date(requestStats.resetAt).toLocaleString("zh-CN")} 起浏览器客户端 (Agent) 请求统计`
+                  : "浏览器客户端 (Agent) 请求统计"
+              }
+            >
+              <span className="inline-flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium tracking-wide text-zinc-500">
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M3 12h18M3 6h18M3 18h12"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  />
+                </svg>
+                请求数
+              </span>
+              <div className="flex items-center gap-1.5 border-l border-zinc-200 bg-blue-50/60 px-2.5 py-1.5">
+                <span className="text-[10px] font-semibold text-blue-700">HTTP</span>
+                <span className="text-xs font-semibold tabular-nums text-blue-900">
+                  {requestStats.http.toLocaleString("zh-CN")}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 border-l border-zinc-200 bg-emerald-50/60 px-2.5 py-1.5">
+                <span className="text-[10px] font-semibold text-emerald-700">WS</span>
+                <span className="text-xs font-semibold tabular-nums text-emerald-900">
+                  {requestStats.ws.toLocaleString("zh-CN")}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void resetRequestCounters()}
+                disabled={resetCounterBusy}
+                className={[
+                  "inline-flex items-center gap-1 border-l border-zinc-200 px-2.5 py-1.5 text-[11px] font-medium",
+                  "text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-900/30",
+                  "disabled:pointer-events-none disabled:opacity-50",
+                ].join(" ")}
+                title="清零浏览器程序请求计数"
+                aria-label="清零浏览器程序请求计数"
+              >
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  aria-hidden="true"
+                  className={resetCounterBusy ? "animate-spin" : ""}
+                >
+                  <path
+                    d="M21 12a9 9 0 1 1-3-6.7L21 8"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M21 3v5h-5"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                {resetCounterBusy ? "清零中…" : "清零"}
+              </button>
+            </div>
+
+            <span
+              className="h-6 w-px shrink-0 bg-zinc-200"
+              aria-hidden="true"
+            />
+
             <button
               type="button"
               disabled={cacheBusy}
