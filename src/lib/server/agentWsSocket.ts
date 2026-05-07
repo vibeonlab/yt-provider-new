@@ -1,4 +1,5 @@
 import type { Server } from "node:http";
+import type { Socket } from "node:net";
 import { parse } from "node:url";
 import { WebSocketServer } from "ws";
 import { setAgentSocket } from "@/lib/server/agentWsHub";
@@ -40,17 +41,19 @@ export function attachAgentWebSocketServer(server: Server) {
       }
 
       /** 关键：去掉 Node http.Server 在 upgrade 后仍可能继承到 socket 上的 timeout，
-       * 否则一些 Node 版本会因 keepAliveTimeout/headersTimeout 在握手后立即踢断（1006）。 */
+       * 否则一些 Node 版本会因 keepAliveTimeout/headersTimeout 在握手后立即踢断（1006）。
+       * Node 类型声明 upgrade 的 socket 为 Duplex，但运行时实际是 net.Socket。 */
+      const netSocket = socket as unknown as Socket;
       try {
-        socket.setTimeout(0);
-        socket.setKeepAlive(true, 30_000);
-        socket.setNoDelay(true);
+        netSocket.setTimeout(0);
+        netSocket.setKeepAlive(true, 30_000);
+        netSocket.setNoDelay(true);
       } catch {
         /* ignore */
       }
 
       console.log(
-        `[agent-ws] upgrade accepted agentId=${agentId} remote=${socket.remoteAddress}:${socket.remotePort}`,
+        `[agent-ws] upgrade accepted agentId=${agentId} remote=${netSocket.remoteAddress}:${netSocket.remotePort}`,
       );
 
       wss.handleUpgrade(req, socket, head, (ws) => {
