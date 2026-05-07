@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { signAdminSession, verifyAdminLogin } from "@/lib/server/adminAuth";
+import { shouldUseSecureCookies } from "@/lib/server/cookieSecure";
 import { verifyCaptcha } from "@/lib/server/captcha";
 
 type LoginBody = {
@@ -70,10 +71,11 @@ export async function POST(req: Request) {
 
   const res = NextResponse.json({ ok: true });
   const maxAge = body.rememberMe ? 60 * 60 * 24 * 30 : 60 * 60 * 8;
+  const secureCookies = await shouldUseSecureCookies();
   res.cookies.set("admin_session", signAdminSession("ytadmin"), {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: secureCookies,
     path: "/",
     maxAge,
   });
