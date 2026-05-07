@@ -6,6 +6,7 @@ import {
 } from "@/lib/server/agentStore";
 import { getSupabaseAdmin } from "@/lib/server/supabaseAdmin";
 import { writeOperationLog } from "@/lib/server/operationLogs";
+import { notifyAgentsOfNewCommands } from "@/lib/server/agentWsHub";
 
 export type StreamerRecord = {
   id: string;
@@ -562,6 +563,7 @@ export async function markCommandResult(input: {
     level: input.success ? "info" : "error",
     meta: { commandId: input.commandId, success: input.success },
   });
+  notifyAgentsOfNewCommands([cmd.agentId]);
   return { ok: true as const };
 }
 
@@ -742,6 +744,8 @@ export async function enqueueBroadcastBrowserControl(
     meta: { commandType, enqueued },
   });
 
+  notifyAgentsOfNewCommands(targets.map((t) => t.agentId));
+
   return {
     ok: true as const,
     enqueued,
@@ -852,6 +856,16 @@ export async function goOnline(streamerId: string) {
       level: selected.length > 0 ? "info" : "warning",
       meta: { streamerId, allocated: selected.length, currentOnlineCount: nextCurrent },
     });
+    if (selected.length > 0) {
+      const uuids = [...new Set(selected.map((s) => s.agent_id as string))];
+      const { data: agentRows } = await admin
+        .from("agents")
+        .select("agent_id")
+        .in("id", uuids);
+      notifyAgentsOfNewCommands(
+        (agentRows || []).map((r) => (r.agent_id as string) || "").filter(Boolean),
+      );
+    }
     return {
       ok: true as const,
       allocated: selected.length,
@@ -919,6 +933,9 @@ export async function goOnline(streamerId: string) {
   streamer.currentOnlineCount = nextCurrent;
   streamer.status = nextCurrent > 0 ? "online" : "offline";
   await saveStore(data);
+  if (selected.length > 0) {
+    notifyAgentsOfNewCommands(selected.map((b) => b.agentId));
+  }
   await writeOperationLog({
     module: "主播设置",
     action: "主播上线",
@@ -974,6 +991,25 @@ export async function goOffline(streamerId: string) {
         .eq("id", assignment.id as string);
     }
 
+    const agentPkList = [
+      ...new Set(
+        (running || [])
+          .map((a) => a.agent_id as string)
+          .filter(Boolean),
+      ),
+    ];
+    if (agentPkList.length > 0) {
+      const { data: agentRows } = await admin
+        .from("agents")
+        .select("agent_id")
+        .in("id", agentPkList);
+      notifyAgentsOfNewCommands(
+        (agentRows || [])
+          .map((r) => (r.agent_id as string) || "")
+          .filter(Boolean),
+      );
+    }
+
     await admin
       .from("streamers")
       .update({ current_online_count: 0, status: "offline" })
@@ -1018,6 +1054,9 @@ export async function goOffline(streamerId: string) {
   streamer.currentOnlineCount = 0;
   streamer.status = "offline";
   await saveStore(data);
+  if (running.length > 0) {
+    notifyAgentsOfNewCommands(running.map((a) => a.agentId));
+  }
   await writeOperationLog({
     module: "主播设置",
     action: "主播下线",

@@ -43,10 +43,14 @@ next-env.d.ts
 # Visual Studio / .NET (WinForms + WebView2)
 **/bin/
 **/obj/
+**/.vs/
 *.user
 *.suo
 *.userosscache
 *.sln.docstates
 
-# Local admin credentials (never commit)
+# Local admin credentials and runtime state (never commit)
 /data/admin-auth.json
+/data/agents.json
+/data/agent-controls.json
+/data/scheduler.json

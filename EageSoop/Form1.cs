@@ -12,6 +12,7 @@ using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
 using System.Threading;
+using System.Net.WebSockets;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
@@ -28,6 +29,12 @@ namespace EageSoop
         private System.Windows.Forms.Timer heartbeatTimer;
         private System.Windows.Forms.Timer statusTimer;
         private System.Windows.Forms.Timer commandTimer;
+        private bool useAgentWebSocket = true;
+        private ClientWebSocket agentRealtimeSocket;
+        private CancellationTokenSource agentRealtimeReceiveCts;
+        private Task agentRealtimeReceiveTask;
+        private System.Windows.Forms.Timer agentRealtimePresenceTimer;
+        private readonly object agentRealtimeSocketLock = new object();
         private string agentId;
         private string serverBaseUrl;
         private string agentName;
@@ -54,6 +61,40 @@ namespace EageSoop
 
         private void Form1_FormClosing(object sender, FormClosingEventArgs e)
         {
+            try
+            {
+                agentRealtimePresenceTimer?.Stop();
+                try
+                {
+                    agentRealtimeReceiveCts?.Cancel();
+                }
+                catch { }
+
+                ClientWebSocket wsSnap;
+                lock (agentRealtimeSocketLock)
+                {
+                    wsSnap = agentRealtimeSocket;
+                    agentRealtimeSocket = null;
+                }
+
+                if (wsSnap != null)
+                {
+                    try
+                    {
+                        wsSnap.Dispose();
+                    }
+                    catch { }
+                }
+
+                try
+                {
+                    agentRealtimeReceiveCts?.Dispose();
+                }
+                catch { }
+                agentRealtimeReceiveCts = null;
+            }
+            catch { }
+
             try
             {
                 if (cacheSizeRefreshTimer != null)
@@ -89,7 +130,8 @@ namespace EageSoop
             cacheSizeRefreshTimer.Start();
             _ = RefreshDiskCacheSizeDisplayAsync();
 
-            _ = RegisterAgentAsync();
+            if (await RegisterAgentAsync().ConfigureAwait(true))
+                await TryStartAgentWebSocketAsync().ConfigureAwait(true);
         }
 
         private async void CacheSizeRefreshTimer_Tick(object sender, EventArgs e)
@@ -786,6 +828,11 @@ namespace EageSoop
             agentName = LoadOrCreateAgentName(appConfigName);
             heartbeatIntervalMs = ParseInt(ConfigurationManager.AppSettings["HeartbeatIntervalMs"], 5000);
             statusReportIntervalMs = ParseInt(ConfigurationManager.AppSettings["StatusReportIntervalMs"], 3000);
+            var wsRaw = ConfigurationManager.AppSettings["UseAgentWebSocket"];
+            useAgentWebSocket = !string.Equals(
+                (wsRaw ?? "").Trim(),
+                "false",
+                StringComparison.OrdinalIgnoreCase);
             agentId = LoadOrCreateAgentId();
         }
 
@@ -854,17 +901,253 @@ namespace EageSoop
             heartbeatTimer = new System.Windows.Forms.Timer();
             heartbeatTimer.Interval = heartbeatIntervalMs;
             heartbeatTimer.Tick += async (s, e) => await SendHeartbeatAsync();
-            heartbeatTimer.Start();
 
             statusTimer = new System.Windows.Forms.Timer();
             statusTimer.Interval = statusReportIntervalMs;
             statusTimer.Tick += async (s, e) => await ReportStatusAsync();
-            statusTimer.Start();
 
             commandTimer = new System.Windows.Forms.Timer();
             commandTimer.Interval = 2000;
             commandTimer.Tick += async (s, e) => await PollCommandsAsync();
-            commandTimer.Start();
+
+            agentRealtimePresenceTimer = new System.Windows.Forms.Timer();
+            agentRealtimePresenceTimer.Interval = 5000;
+            agentRealtimePresenceTimer.Tick += async (s, e) => await SendWsPresenceAsync();
+
+            StartHttpPollTimers();
+        }
+
+        private void StartHttpPollTimers()
+        {
+            if (heartbeatTimer != null) heartbeatTimer.Start();
+            if (statusTimer != null) statusTimer.Start();
+            if (commandTimer != null) commandTimer.Start();
+        }
+
+        private void StopHttpPollTimers()
+        {
+            if (heartbeatTimer != null) heartbeatTimer.Stop();
+            if (statusTimer != null) statusTimer.Stop();
+            if (commandTimer != null) commandTimer.Stop();
+        }
+
+        private static string BuildAgentWebSocketUri(string baseUrl, string agId)
+        {
+            if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(agId)) return null;
+            var trimmed = baseUrl.Trim().TrimEnd('/');
+            if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var root)) return null;
+            var ub = new UriBuilder(root);
+            ub.Scheme = string.Equals(ub.Scheme, "https", StringComparison.OrdinalIgnoreCase)
+                ? "wss"
+                : "ws";
+            var pathPrefix = root.AbsolutePath;
+            if (string.IsNullOrEmpty(pathPrefix) || pathPrefix == "/")
+                ub.Path = "/api/agents/ws";
+            else
+                ub.Path = pathPrefix.TrimEnd('/') + "/api/agents/ws";
+            ub.Query = "agentId=" + Uri.EscapeDataString(agId);
+            return ub.Uri.ToString();
+        }
+
+        private async Task TryStartAgentWebSocketAsync()
+        {
+            if (!useAgentWebSocket) return;
+            if (string.IsNullOrWhiteSpace(agentId)) return;
+            var uriStr = BuildAgentWebSocketUri(serverBaseUrl, agentId);
+            if (string.IsNullOrWhiteSpace(uriStr)) return;
+
+            await StopAgentWebSocketAsync(restartHttpPoll: false).ConfigureAwait(true);
+
+            var ws = new ClientWebSocket();
+            try
+            {
+                await ws.ConnectAsync(new Uri(uriStr), CancellationToken.None).ConfigureAwait(true);
+            }
+            catch
+            {
+                try { ws.Dispose(); } catch { }
+                return;
+            }
+
+            lock (agentRealtimeSocketLock)
+            {
+                agentRealtimeSocket = ws;
+            }
+
+            StopHttpPollTimers();
+            agentRealtimeReceiveCts = new CancellationTokenSource();
+            var token = agentRealtimeReceiveCts.Token;
+            agentRealtimeReceiveTask = Task.Run(() => AgentWebSocketReceiveLoopAsync(token), token);
+            agentRealtimePresenceTimer.Start();
+        }
+
+        private async Task StopAgentWebSocketAsync(bool restartHttpPoll)
+        {
+            agentRealtimePresenceTimer.Stop();
+            try
+            {
+                agentRealtimeReceiveCts?.Cancel();
+            }
+            catch { }
+
+            if (agentRealtimeReceiveTask != null)
+            {
+                try
+                {
+                    await Task.WhenAny(agentRealtimeReceiveTask, Task.Delay(2000)).ConfigureAwait(true);
+                }
+                catch { }
+            }
+
+            agentRealtimeReceiveTask = null;
+            try
+            {
+                agentRealtimeReceiveCts?.Dispose();
+            }
+            catch { }
+            agentRealtimeReceiveCts = null;
+
+            ClientWebSocket local;
+            lock (agentRealtimeSocketLock)
+            {
+                local = agentRealtimeSocket;
+                agentRealtimeSocket = null;
+            }
+
+            if (local != null)
+            {
+                try
+                {
+                    if (local.State == WebSocketState.Open || local.State == WebSocketState.CloseReceived)
+                        await local.CloseAsync(
+                            WebSocketCloseStatus.NormalClosure,
+                            "shutdown",
+                            CancellationToken.None).ConfigureAwait(true);
+                }
+                catch { }
+                try { local.Dispose(); } catch { }
+            }
+
+            if (restartHttpPoll) StartHttpPollTimers();
+        }
+
+        private async Task SendWsPresenceAsync()
+        {
+            ClientWebSocket ws;
+            lock (agentRealtimeSocketLock)
+            {
+                ws = agentRealtimeSocket;
+            }
+
+            if (ws == null || ws.State != WebSocketState.Open) return;
+            try
+            {
+                var browsers = browserContexts.Select(ctx =>
+                {
+                    var url = ctx.WebView != null && ctx.WebView.Source != null
+                        ? ctx.WebView.Source.ToString()
+                        : (ctx.CurrentUrl ?? "");
+                    return new
+                    {
+                        browserId = ctx.BrowserId,
+                        name = ctx.Name,
+                        wsUrl = "local-webview://" + ctx.BrowserId,
+                        connected = ctx.WebView != null && !ctx.WebView.IsDisposed,
+                        tabsCount = 1,
+                        activeUrl = url,
+                        tabs = new[] { string.IsNullOrWhiteSpace(url) ? "about:blank" : url }
+                    };
+                }).ToArray();
+
+                var payload = new { type = "presence", browsers = browsers };
+                var jsonText = json.Serialize(payload);
+                var bytes = Encoding.UTF8.GetBytes(jsonText);
+                await ws.SendAsync(
+                    new ArraySegment<byte>(bytes),
+                    WebSocketMessageType.Text,
+                    true,
+                    CancellationToken.None).ConfigureAwait(true);
+            }
+            catch
+            {
+                await StopAgentWebSocketAsync(restartHttpPoll: true).ConfigureAwait(true);
+            }
+        }
+
+        private async Task AgentWebSocketReceiveLoopAsync(CancellationToken ct)
+        {
+            var buffer = new byte[65536];
+            while (!ct.IsCancellationRequested)
+            {
+                ClientWebSocket ws;
+                lock (agentRealtimeSocketLock)
+                {
+                    ws = agentRealtimeSocket;
+                }
+
+                if (ws == null || ws.State != WebSocketState.Open) break;
+
+                try
+                {
+                    using (var ms = new MemoryStream())
+                    {
+                        WebSocketReceiveResult result;
+                        do
+                        {
+                            result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), ct)
+                                .ConfigureAwait(false);
+                            if (result.MessageType == WebSocketMessageType.Close) return;
+                            if (result.Count > 0) ms.Write(buffer, 0, result.Count);
+                        } while (!result.EndOfMessage);
+
+                        var text = Encoding.UTF8.GetString(ms.ToArray());
+                        if (string.IsNullOrWhiteSpace(text)) continue;
+
+                        WsCommandMessage parsed = null;
+                        try
+                        {
+                            parsed = json.Deserialize<WsCommandMessage>(text);
+                        }
+                        catch
+                        {
+                            continue;
+                        }
+
+                        if (parsed == null || parsed.type == null) continue;
+                        if (!string.Equals(parsed.type, "commands", StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        if (parsed.data == null || parsed.data.Count == 0) continue;
+
+                        var list = parsed.data;
+                        BeginInvoke(new Action(() => { _ = ProcessWsCommandsAsync(list); }));
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch
+                {
+                    break;
+                }
+            }
+
+            if (!IsDisposed && !Disposing)
+            {
+                BeginInvoke(
+                    new Action(() =>
+                    {
+                        _ = StopAgentWebSocketAsync(restartHttpPoll: true);
+                    }));
+            }
+        }
+
+        private async Task ProcessWsCommandsAsync(List<AgentCommand> cmds)
+        {
+            foreach (var cmd in cmds)
+            {
+                await ExecuteCommandAsync(cmd).ConfigureAwait(true);
+            }
         }
 
         private string ProcessedCommandsFilePath()
@@ -1003,6 +1286,7 @@ namespace EageSoop
             if (!await RegisterAgentAsync())
                 return;
             await ReportStatusAsync();
+            await TryStartAgentWebSocketAsync();
             MessageBox.Show("程序名称已更新。");
         }
 
@@ -1065,6 +1349,12 @@ namespace EageSoop
             public string type { get; set; }
             public string browserId { get; set; }
             public CommandPayload payload { get; set; }
+        }
+
+        private class WsCommandMessage
+        {
+            public string type { get; set; }
+            public List<AgentCommand> data { get; set; }
         }
 
         private class CommandPayload

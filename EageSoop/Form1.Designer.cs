@@ -182,16 +182,15 @@ namespace EageSoop
             this.lblLastMemoryReleaseTime.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(64)))), ((int)(((byte)(64)))), ((int)(((byte)(64)))));
             this.lblLastMemoryReleaseTime.Location = new System.Drawing.Point(458, 8);
             this.lblLastMemoryReleaseTime.Name = "lblLastMemoryReleaseTime";
-            this.lblLastMemoryReleaseTime.Size = new System.Drawing.Size(95, 16);
+            this.lblLastMemoryReleaseTime.Size = new System.Drawing.Size(94, 20);
             this.lblLastMemoryReleaseTime.TabIndex = 5;
             this.lblLastMemoryReleaseTime.Text = "上次切换：—";
             // 
             // lblLastMemoryReleaseMessage
             // 
-            this.lblLastMemoryReleaseMessage.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left)
+            this.lblLastMemoryReleaseMessage.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
             this.lblLastMemoryReleaseMessage.AutoEllipsis = true;
-            this.lblLastMemoryReleaseMessage.AutoSize = false;
             this.lblLastMemoryReleaseMessage.Font = new System.Drawing.Font("微软雅黑", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.lblLastMemoryReleaseMessage.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(96)))), ((int)(((byte)(96)))), ((int)(((byte)(96)))));
             this.lblLastMemoryReleaseMessage.Location = new System.Drawing.Point(458, 26);
@@ -202,10 +201,9 @@ namespace EageSoop
             // 
             // lblDiskCacheSize
             // 
-            this.lblDiskCacheSize.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left)
+            this.lblDiskCacheSize.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
             this.lblDiskCacheSize.AutoEllipsis = true;
-            this.lblDiskCacheSize.AutoSize = false;
             this.lblDiskCacheSize.Font = new System.Drawing.Font("微软雅黑", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.lblDiskCacheSize.ForeColor = System.Drawing.Color.FromArgb(((int)(((byte)(70)))), ((int)(((byte)(70)))), ((int)(((byte)(120)))));
             this.lblDiskCacheSize.Location = new System.Drawing.Point(10, 46);
@@ -220,9 +218,9 @@ namespace EageSoop
             this.tabControl1.Location = new System.Drawing.Point(0, 113);
             this.tabControl1.Name = "tabControl1";
             this.tabControl1.SelectedIndex = 0;
-            this.tabControl1.SelectedIndexChanged += new System.EventHandler(this.TabControl1_SelectedIndexChanged);
             this.tabControl1.Size = new System.Drawing.Size(1280, 747);
             this.tabControl1.TabIndex = 0;
+            this.tabControl1.SelectedIndexChanged += new System.EventHandler(this.TabControl1_SelectedIndexChanged);
             // 
             // Form1
             // 
