@@ -319,6 +319,74 @@ export async function listStreamers() {
   return data.streamers;
 }
 
+/**
+ * 对「状态为 online」且 running 数仍低于购买人数的主播，各调用一次 goOnline 补位。
+ * 由 server.ts 定时器驱动；goOnline 内部幂等，已满则立刻返回。
+ */
+export async function autoReplenishOnlineStreamers(): Promise<{
+  ok: boolean;
+  shortfalls: number;
+  totalAllocated: number;
+}> {
+  const admin = getSupabaseAdmin();
+  if (admin) {
+    await reconcileSupabaseAssignments();
+    const { data: streamers, error: sErr } = await admin
+      .from("streamers")
+      .select("id,target_online_count")
+      .eq("status", "online");
+    if (sErr || !streamers?.length) {
+      return { ok: !sErr, shortfalls: 0, totalAllocated: 0 };
+    }
+    const { data: runningRows, error: aErr } = await admin
+      .from("assignments")
+      .select("streamer_id")
+      .eq("status", "running");
+    if (aErr) {
+      return { ok: false, shortfalls: 0, totalAllocated: 0 };
+    }
+    const runningByStreamer = new Map<string, number>();
+    for (const r of runningRows || []) {
+      const sid = r.streamer_id as string;
+      if (!sid) continue;
+      runningByStreamer.set(sid, (runningByStreamer.get(sid) || 0) + 1);
+    }
+    let shortfalls = 0;
+    let totalAllocated = 0;
+    for (const s of streamers) {
+      const id = s.id as string;
+      const target = Number(s.target_online_count) || 0;
+      const current = runningByStreamer.get(id) || 0;
+      if (target <= current) continue;
+      shortfalls += 1;
+      const result = await goOnline(id);
+      if (result.ok) {
+        totalAllocated += result.allocated;
+      }
+    }
+    return { ok: true, shortfalls, totalAllocated };
+  }
+
+  const data = await readStore();
+  await reconcileJsonAssignments(data);
+  let shortfalls = 0;
+  let totalAllocated = 0;
+  for (const s of data.streamers) {
+    if (s.status !== "online") continue;
+    const target = s.targetOnlineCount || 0;
+    const current = data.assignments.filter(
+      (a) => a.streamerId === s.id && a.status === "running",
+    ).length;
+    if (target <= current) continue;
+    shortfalls += 1;
+    const result = await goOnline(s.id);
+    if (result.ok) {
+      totalAllocated += result.allocated;
+    }
+  }
+  return { ok: true, shortfalls, totalAllocated };
+}
+
 export async function addStreamer(input: {
   name: string;
   liveUrl: string;

@@ -2,6 +2,7 @@ import http from "node:http";
 import { parse } from "node:url";
 import next from "next";
 import { attachAgentWebSocketServer } from "@/lib/server/agentWsSocket";
+import { autoReplenishOnlineStreamers } from "@/lib/server/schedulerStore";
 
 void (async function main() {
   /** 仅当显式 development 时为开发模式；其余一律 production（避免 PM2 未设 NODE_ENV 或误设时仍注入 HMR） */
@@ -62,5 +63,32 @@ void (async function main() {
         "upgrade",
       )}`,
     );
+
+    /**
+     * 定时补足：状态为 online 且 running 数 < 购买人数的主播，各 goOnline 一次。
+     * AUTO_REPLENISH_INTERVAL_MS=0 可关闭；默认 30s。
+     */
+    const replenishMs = parseInt(
+      process.env.AUTO_REPLENISH_INTERVAL_MS || "30000",
+      10,
+    );
+    if (Number.isFinite(replenishMs) && replenishMs > 0) {
+      const tick = () => {
+        void autoReplenishOnlineStreamers()
+          .then(({ shortfalls, totalAllocated }) => {
+            if (totalAllocated > 0) {
+              console.log(
+                `[auto-replenish] shortfalls=${shortfalls} allocated=${totalAllocated}`,
+              );
+            }
+          })
+          .catch((err) => console.error("[auto-replenish]", err));
+      };
+      setInterval(tick, replenishMs);
+      setTimeout(tick, 15_000);
+      console.log(
+        `[server] auto-replenish online streamers every ${replenishMs}ms (set AUTO_REPLENISH_INTERVAL_MS=0 to disable)`,
+      );
+    }
   });
 })();
