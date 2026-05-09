@@ -40,6 +40,18 @@ namespace EageSoop
         private System.Windows.Forms.Timer agentRealtimePresenceTimer;
         private System.Windows.Forms.Timer transportUiTimer;
         private readonly object agentRealtimeSocketLock = new object();
+
+        // === WebSocket 自动重连：网络/服务端抖动断开后退避重试，期间走 HTTP 不影响业务 ===
+        private bool wsAutoReconnect = true;
+        private System.Windows.Forms.Timer wsReconnectTimer;
+        private int wsReconnectAttempts;
+        private bool wsReconnectInProgress;
+        private DateTime wsNextReconnectAt;
+        /// <summary>
+        /// 退避阶梯（毫秒）。每次失败递增到下一档，成功后归零。叠加 ±20% 抖动避免 500 台同步重连。
+        /// </summary>
+        private static readonly int[] WsReconnectStepsMs = { 5000, 10000, 20000, 40000, 60000 };
+        private static readonly Random wsReconnectJitterRandom = new Random();
         private string agentId;
         private string serverBaseUrl;
         private string agentName;
@@ -121,6 +133,18 @@ namespace EageSoop
                     cacheSizeRefreshTimer.Tick -= CacheSizeRefreshTimer_Tick;
                     cacheSizeRefreshTimer.Dispose();
                     cacheSizeRefreshTimer = null;
+                }
+            }
+            catch { }
+
+            try
+            {
+                if (wsReconnectTimer != null)
+                {
+                    wsReconnectTimer.Stop();
+                    wsReconnectTimer.Tick -= WsReconnectTimer_Tick;
+                    wsReconnectTimer.Dispose();
+                    wsReconnectTimer = null;
                 }
             }
             catch { }
@@ -852,6 +876,12 @@ namespace EageSoop
                 (wsRaw ?? "").Trim(),
                 "false",
                 StringComparison.OrdinalIgnoreCase);
+            // 默认开启自动重连；显式 false 关闭（关闭后 WS 一旦断开就只走 HTTP，需重启程序或重新「设置 Agent 名」才会再连）。
+            var wsRetryRaw = ConfigurationManager.AppSettings["WebSocketAutoReconnect"];
+            wsAutoReconnect = !string.Equals(
+                (wsRetryRaw ?? "").Trim(),
+                "false",
+                StringComparison.OrdinalIgnoreCase);
             agentId = LoadOrCreateAgentId();
         }
 
@@ -937,6 +967,10 @@ namespace EageSoop
             transportUiTimer.Interval = 2000;
             transportUiTimer.Tick += TransportUiTimer_Tick;
 
+            wsReconnectTimer = new System.Windows.Forms.Timer();
+            wsReconnectTimer.Interval = WsReconnectStepsMs[0];
+            wsReconnectTimer.Tick += WsReconnectTimer_Tick;
+
             StartHttpPollTimers();
             transportUiTimer.Start();
         }
@@ -989,8 +1023,24 @@ namespace EageSoop
                 return;
             }
 
+            // WS 已断/未起：UI 上额外显示「下一次重连倒计时」或「尝试中」
+            string suffix = "";
+            if (wsAutoReconnect)
+            {
+                if (wsReconnectInProgress)
+                {
+                    suffix = "；正在尝试恢复 WebSocket";
+                }
+                else if (wsReconnectTimer != null && wsReconnectTimer.Enabled)
+                {
+                    var remainSec = (int)Math.Ceiling((wsNextReconnectAt - DateTime.Now).TotalSeconds);
+                    if (remainSec < 1) remainSec = 1;
+                    suffix = "；将在 " + remainSec + "s 后重试 WebSocket";
+                }
+            }
+
             lblAgentTransport.Text =
-                "调度通道：HTTP 轮询（WebSocket 未连接或已断开；命令定时 HTTP 拉取）";
+                "调度通道：HTTP 轮询（WebSocket 未连接或已断开；命令定时 HTTP 拉取" + suffix + "）";
             lblAgentTransport.ForeColor = Color.FromArgb(160, 85, 20);
         }
 
@@ -1026,12 +1076,59 @@ namespace EageSoop
             return ub.Uri.ToString();
         }
 
+        /// <summary>
+        /// 安排一次后台 WebSocket 重连尝试。已经在排队 / 正在拨号 / 不支持 WS / 关闭自动重连时直接返回。
+        /// 退避用 5s→10s→20s→40s→60s 阶梯，叠加 ±20% 抖动以避免大量客户端同时重连造成洪峰。
+        /// </summary>
+        private void ScheduleWsReconnect()
+        {
+            if (!useAgentWebSocket) return;
+            if (!wsAutoReconnect) return;
+            if (wsPlatformUnsupported) return;
+            if (IsDisposed || Disposing) return;
+            if (wsReconnectTimer == null) return;
+            if (wsReconnectInProgress) return;
+            if (wsReconnectTimer.Enabled) return;
+
+            var idx = Math.Min(Math.Max(0, wsReconnectAttempts), WsReconnectStepsMs.Length - 1);
+            var baseMs = WsReconnectStepsMs[idx];
+            // ±20% 抖动；下限 2s 兜底，避免极端情况立刻重连
+            var jitter = (int)((wsReconnectJitterRandom.NextDouble() * 0.4 - 0.2) * baseMs);
+            var delayMs = Math.Max(2000, baseMs + jitter);
+
+            wsReconnectTimer.Interval = delayMs;
+            wsNextReconnectAt = DateTime.Now.AddMilliseconds(delayMs);
+            wsReconnectTimer.Start();
+            RefreshAgentTransportDisplay();
+        }
+
+        private async void WsReconnectTimer_Tick(object sender, EventArgs e)
+        {
+            if (wsReconnectTimer != null) wsReconnectTimer.Stop();
+            if (!useAgentWebSocket || wsPlatformUnsupported) return;
+            if (wsReconnectInProgress) return;
+
+            wsReconnectInProgress = true;
+            try
+            {
+                wsReconnectAttempts += 1;
+                await TryStartAgentWebSocketAsync().ConfigureAwait(true);
+            }
+            finally
+            {
+                wsReconnectInProgress = false;
+            }
+        }
+
         private async Task TryStartAgentWebSocketAsync()
         {
             if (!useAgentWebSocket) return;
             if (string.IsNullOrWhiteSpace(agentId)) return;
             var uriStr = BuildAgentWebSocketUri(serverBaseUrl, agentId);
             if (string.IsNullOrWhiteSpace(uriStr)) return;
+
+            // 进入新的拨号流程，把可能在跑的退避计时器先停掉，避免叠加
+            if (wsReconnectTimer != null && wsReconnectTimer.Enabled) wsReconnectTimer.Stop();
 
             await StopAgentWebSocketAsync(restartHttpPoll: false).ConfigureAwait(true);
 
@@ -1043,7 +1140,8 @@ namespace EageSoop
             catch (PlatformNotSupportedException)
             {
                 /** 接入了 System.Net.WebSockets.Client.Managed（纯托管实现，支持 Win7+），
-                 *  这里理论上不会再抛 PlatformNotSupportedException；保留兜底降级，避免未知环境硬退出。 */
+                 *  这里理论上不会再抛 PlatformNotSupportedException；保留兜底降级，避免未知环境硬退出。
+                 *  此分支判定为「永久不支持」，不重连。 */
                 wsPlatformUnsupported = true;
                 useAgentWebSocket = false;
                 StartHttpPollTimers();
@@ -1052,9 +1150,10 @@ namespace EageSoop
             }
             catch
             {
-                useAgentWebSocket = false;
+                // 构造异常不视为永久失败，按退避重试；期间 HTTP 轮询继续工作
                 StartHttpPollTimers();
                 RefreshAgentTransportDisplay();
+                ScheduleWsReconnect();
                 return;
             }
 
@@ -1073,8 +1172,11 @@ namespace EageSoop
             }
             catch
             {
+                // 网络/TLS/服务端 502 等连接失败：HTTP 轮询继续，按退避调度下一次 WS 尝试
                 try { ws.Dispose(); } catch { }
+                StartHttpPollTimers();
                 RefreshAgentTransportDisplay();
+                ScheduleWsReconnect();
                 return;
             }
 
@@ -1088,6 +1190,11 @@ namespace EageSoop
             var token = agentRealtimeReceiveCts.Token;
             agentRealtimeReceiveTask = Task.Run(() => AgentWebSocketReceiveLoopAsync(token), token);
             agentRealtimePresenceTimer.Start();
+
+            // 拨号成功，重置退避；下一次失败重新从最短间隔开始
+            wsReconnectAttempts = 0;
+            if (wsReconnectTimer != null && wsReconnectTimer.Enabled) wsReconnectTimer.Stop();
+
             RefreshAgentTransportDisplay();
         }
 
@@ -1139,6 +1246,9 @@ namespace EageSoop
             }
 
             if (restartHttpPoll) StartHttpPollTimers();
+            // restartHttpPoll=true 表示这是「断开后回退到 HTTP」的路径，需要安排自动重连；
+            // restartHttpPoll=false 用于 TryStartAgentWebSocketAsync 内的清理，调用方会立刻重新拨号，不应再调度
+            if (restartHttpPoll) ScheduleWsReconnect();
             RefreshAgentTransportDisplay();
         }
 
@@ -1397,6 +1507,9 @@ namespace EageSoop
             if (!await RegisterAgentAsync())
                 return;
             await ReportStatusAsync();
+            // 用户主动操作：重置退避计数，立刻拨号
+            wsReconnectAttempts = 0;
+            if (wsReconnectTimer != null && wsReconnectTimer.Enabled) wsReconnectTimer.Stop();
             await TryStartAgentWebSocketAsync();
             RefreshAgentTransportDisplay();
             MessageBox.Show("程序名称已更新。");
